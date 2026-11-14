@@ -66,7 +66,7 @@ button, input, select { font: inherit; color: inherit; }
 .bar h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
 .status { font-size: 12px; color: var(--ink-2); text-align: right; }
 .status.err { color: var(--bad); font-weight: 600; }
-.tabs { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 3px; }
+.tabs { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 3px; }
 .tab { border: 0; background: transparent; padding: 8px 2px; border-radius: 8px; font-weight: 600; font-size: 13px; color: var(--ink-2); cursor: pointer; }
 .tab[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(10, 20, 40, .12); }
 
@@ -240,6 +240,12 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
 .coderow .cbtns .btn { flex: 1 1 120px; }
 .hint.seen:empty { display: none; }
 .branchbar select { font-weight: 600; }
+/* six tabs and the branch picker are too tall to pin to the top of a phone */
+.top { position: static; }
+.slitem { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.slitem:first-child { border-top: 0; padding-top: 0; }
+.slitem strong { display: block; }
+.field small.hint { font-weight: 400; }
 .fields2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .slrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .slrow:first-of-type { border-top: 0; padding-top: 0; }
@@ -277,6 +283,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       <button class="tab" role="tab" data-act="tab" data-tab="week" id="tab-week">Week</button>
       <button class="tab" role="tab" data-act="tab" data-tab="staff" id="tab-staff">Staff</button>
       <button class="tab" role="tab" data-act="tab" data-tab="month" id="tab-month">Month</button>
+      <button class="tab" role="tab" data-act="tab" data-tab="slips" id="tab-slips">Payslips</button>
       <button class="tab" role="tab" data-act="tab" data-tab="backup" id="tab-backup">Backup</button>
     </nav>
     <div id="branchbar" class="branchbar" hidden></div>
@@ -557,19 +564,39 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     var best = null; Object.keys(state.weeks).sort().forEach(function (k) { if (k < wid && state.weeks[k].slips && state.weeks[k].slips[sid]) best = state.weeks[k].slips[sid]; });
     return best;
   }
-  function slipButtons() {
-    if (isSup() || ui.tab !== 'week') return;
-    Array.prototype.forEach.call(app.querySelectorAll('.pay[data-sid]'), function (card) {
-      var sid = card.getAttribute('data-sid'); if (!state.staff[sid]) return;
-      var sl = slipOf(ui.wid, sid, false), b = document.createElement('button');
-      b.className = 'btn'; b.setAttribute('data-act', 'slip-open'); b.style.marginTop = '10px'; b.style.width = '100%';
-      b.textContent = sl ? (sl.ready ? 'Payslip: ready to send' : 'Payslip: started, not ready') : 'Add payslip';
-      card.appendChild(b);
-    });
-  }
+  function slipButtons() { }
   function slIn(k, label, val, type) {
     return '<label class="field"><span>' + esc(label) + '</span><input type="' + (type === 'date' ? 'date' : 'text') + '"' + (type || type === 'text' ? '' : ' inputmode="decimal" class="num"') + ' data-f="sl-f" data-k="' + esc(k) + '" value="' + esc(val === undefined || val === null ? '' : val) + '" autocomplete="off"></label>';
   }
+  function deIdx(sl, re) { var at = -1; (sl.de || []).forEach(function (r, i) { if (at < 0 && re.test(String(r.d || ''))) at = i; }); return at; }
+  function deIn(sl, re, label, hint) {
+    var i = deIdx(sl, re); if (i < 0) return '';
+    return '<label class="field"><span>' + esc(label) + '</span><input type="text" inputmode="decimal" class="num" data-f="sl-f" data-k="de.' + i + '.v" value="' + esc(sl.de[i].v || '') + '" autocomplete="off"><small class="hint">' + esc(hint) + '</small></label>';
+  }
+  function big(k, label, val, hint, type) {
+    return '<label class="field"><span>' + esc(label) + '</span><input type="' + (type === 'date' ? 'date' : 'text') + '"' + (type ? '' : ' inputmode="decimal" class="num"') + ' data-f="sl-f" data-k="' + esc(k) + '" value="' + esc(val === undefined || val === null ? '' : val) + '" autocomplete="off">' + (hint ? '<small class="hint">' + esc(hint) + '</small>' : '') + '</label>';
+  }
+  /* The Payslips tab: pick the week, see everyone, open one. */
+  function slipsTabHTML() {
+    var wid = ui.wid, end = addDays(wid, 6), staff = sortedStaff().filter(function (e) { return !leaveAllWeek(e[1], wid); });
+    var h = '<section class="card"><div class="weeknav"><button class="icon" data-act="prev" aria-label="Previous week">' + ICON.left + '</button>' +
+      '<div class="weeklabel"><strong>' + esc(fShort.format(parse(wid)) + ' – ' + fShort.format(parse(end))) + '</strong><span>Payslips for this week</span></div>' +
+      '<button class="icon" data-act="next" aria-label="Next week">' + ICON.right + '</button></div></section>';
+    if (!staff.length) return h + '<div class="card empty"><strong>No staff here</strong><p>Add your employees in the Staff tab first.</p></div>';
+    var n = { ready: 0, started: 0 }, canCopy = 0;
+    var rows = staff.map(function (e) {
+      var sl = slipOf(wid, e[0], false), stt = sl ? (sl.ready ? 'ready' : 'started') : 'none';
+      if (sl) n[stt]++; else if (slipPrev(wid, e[0])) canCopy++;
+      return '<div class="slitem" data-sid="' + esc(e[0]) + '"><div><strong>' + esc(e[1].name) + '</strong><span class="hint seen' + (stt === 'ready' ? ' ok' : stt === 'started' ? ' wait' : '') + '">' +
+        (stt === 'ready' ? 'Ready to send' + (sl.nett ? ' · take-home ' + esc(sl.nett) : '') : stt === 'started' ? 'Started, not ready yet' : 'No payslip yet') + '</span></div>' +
+        '<button class="btn' + (stt === 'none' ? ' primary' : '') + '" data-act="slip-open">' + (stt === 'none' ? 'Add' : 'Open') + '</button></div>';
+    }).join('');
+    h += '<section class="card"><h2 class="sec-title">Employees</h2><div class="sllist">' + rows + '</div>' +
+      (canCopy ? '<button class="btn" style="margin-top:12px;width:100%" data-act="slip-copyall">Start ' + canCopy + (canCopy === 1 ? ' payslip' : ' payslips') + ' from last time’s figures</button>' : '') + '</section>';
+    h += '<p class="hint">' + n.ready + ' ready, ' + n.started + ' started. Only ready payslips are sent. ' + esc(slipWhen()) + '</p>' + slipSetHTML();
+    return h;
+  }
+  /* One payslip, the short way: the few boxes that change every week, then everything else behind one button. */
   function slipHTML() {
     var wid = ui.slip.wid, sid = ui.slip.sid, st = state.staff[sid], sl = slipOf(wid, sid, true), pay = st.pay || {};
     if (ui.slip.preview) {
@@ -577,23 +604,42 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       return '<section class="card">' + slipView(full) + '</section><button class="btn primary" data-act="slip-edit">Back to editing</button>';
     }
     var grid = function (list) { return '<div class="fields2">' + list.map(function (f) { return slIn(f[0], f[1], sl[f[0]], f[2]); }).join('') + '</div>'; };
-    var h = '<section class="card nudge"><div><strong>Payslip: ' + esc(st.name) + '</strong><p class="hint">Week ' + esc(fShort.format(parse(wid)) + ' – ' + fShort.format(parse(addDays(wid, 6)))) + '. Copy the figures from your payroll payslip. The app does not work out tax.</p></div><button class="btn" data-act="slip-close">Done</button></section>';
-    if (slipPrev(wid, sid)) h += '<button class="btn" data-act="slip-copy">' + (ui.slip.copyAsk ? 'Tap again: replaces what is typed here' : 'Copy from this person’s last payslip') + '</button>';
-    h += '<section class="card"><h2 class="sec-title">Employee</h2><div class="fields2">' + slIn('@fullName', 'Full name on payslip', pay.fullName || st.name, 'text') + slIn('@pps', 'PPS No.', pay.pps, 'text') + slIn('@email', 'Email (for sending payslips)', pay.email, 'text') + '</div><p class="hint" style="margin-top:8px">Saved with the employee and reused every week.</p></section>';
-    h += '<section class="card"><h2 class="sec-title">Period</h2>' + grid(SL_HEAD) + '</section>';
-    h += '<section class="card"><h2 class="sec-title">Pay elements</h2>' + (sl.el || []).map(function (r, i) {
-      return '<div class="slrow">' + slIn('el.' + i + '.d', 'Description', r.d, 'text') + slIn('el.' + i + '.t', 'Tax (Y/N)', r.t, 'text') + slIn('el.' + i + '.h', 'Hours', r.h) + slIn('el.' + i + '.v', 'Value', r.v) + '<button class="btn danger" data-act="slip-rm" data-k="el.' + i + '">Remove row</button></div>';
-    }).join('') + '<button class="btn" data-act="slip-add" data-k="el">Add pay row</button></section>';
-    h += '<section class="card"><h2 class="sec-title">Deductions</h2>' + (sl.de || []).map(function (r, i) {
-      return '<div class="slrow">' + slIn('de.' + i + '.d', 'Description', r.d, 'text') + slIn('de.' + i + '.t', 'Tax (Y/N)', r.t, 'text') + slIn('de.' + i + '.v', 'Value', r.v) + slIn('de.' + i + '.tot', 'Total to date', r.tot) + '<button class="btn danger" data-act="slip-rm" data-k="de.' + i + '">Remove row</button></div>';
-    }).join('') + '<button class="btn" data-act="slip-add" data-k="de">Add deduction row</button><p class="hint" style="margin-top:8px">For example Tax, PRSI EE, USC, MyFuture Fund, Emp’er Cont.</p></section>';
-    h += '<section class="card"><h2 class="sec-title">Summary</h2>' + grid(SL_SUM) + '</section>';
-    h += '<section class="card"><h2 class="sec-title">Cumulative details</h2>' + grid(SL_CUM) + '</section>';
-    h += '<section class="card"><h2 class="sec-title">Tax / PRSI</h2>' + grid(SL_TAX) + '</section>';
-    h += '<section class="card"><h2 class="sec-title">Comments and notes</h2><div class="addform">' + slIn('comments', 'Comments', sl.comments, 'text') + slIn('notes', 'Notes', sl.notes, 'text') + '</div></section>';
-    h += '<section class="card"><div class="addform"><button class="btn" data-act="slip-preview">See how the employee will see it</button>' +
-      '<button class="btn' + (sl.ready ? '' : ' primary') + '" data-act="slip-ready">' + (sl.ready ? 'Marked ready. Tap to hold it back' : 'Mark ready to send') + '</button>' +
-      '<p class="hint">Only payslips marked ready are sent, on the day you chose in the Staff tab. ' + esc(slipWhen()) + '</p>' +
+    var h = '<section class="card nudge"><div><strong>' + esc(st.name) + '</strong><p class="hint">Week ' + esc(fShort.format(parse(wid)) + ' – ' + fShort.format(parse(addDays(wid, 6)))) + '. Look at the payslip from your payroll and copy the numbers into the same boxes here.</p></div><button class="btn" data-act="slip-close">Back</button></section>';
+    if (slipPrev(wid, sid)) h += '<button class="btn" data-act="slip-copy">' + (ui.slip.copyAsk ? 'Tap again: replaces what is typed here' : 'Use last time’s figures as a start') + '</button>';
+    h += '<section class="card"><h2 class="sec-title">1. Pay</h2><div class="addform">' +
+      big('el.0.h', 'Hours', (sl.el && sl.el[0] || {}).h, 'The Hours box under Pay Elements.') +
+      big('gross', 'Gross Pay (€)', sl.gross, 'Pay before anything is taken off.') + '</div></section>';
+    h += '<section class="card"><h2 class="sec-title">2. Taken off</h2><div class="addform">' +
+      deIn(sl, /^tax$/i, 'Tax (€)', 'The Value next to Tax under Deductions.') +
+      deIn(sl, /prsi/i, 'PRSI (€)', 'The Value next to PRSI EE.') +
+      deIn(sl, /usc/i, 'USC (€)', 'The Value next to USC.') +
+      (sl.de || []).map(function (r, i) {
+        if (/^tax$/i.test(r.d || '') || /prsi|usc/i.test(r.d || '')) return '';
+        return '<div class="slrow">' + slIn('de.' + i + '.d', 'What it is', r.d, 'text') + slIn('de.' + i + '.v', 'Amount (€)', r.v) + '<button class="btn danger" data-act="slip-rm" data-k="de.' + i + '">Remove</button></div>';
+      }).join('') +
+      '<button class="btn" data-act="slip-add" data-k="de">Add another line (pension, employer part…)</button></div></section>';
+    h += '<section class="card"><h2 class="sec-title">3. Take-home</h2><div class="addform">' +
+      big('nett', 'Nett Pay (€)', sl.nett, 'What the employee actually gets.') +
+      '<button class="btn" data-act="slip-calc">Work it out: Gross minus what is taken off</button>' +
+      big('payDate', 'Pay date', sl.payDate, '', 'date') + '</div></section>';
+    h += '<section class="card"><h2 class="sec-title">4. Send to</h2><div class="addform">' +
+      '<label class="field"><span>Employee’s email</span><input type="text" inputmode="email" data-f="sl-f" data-k="@email" value="' + esc(pay.email || '') + '" autocomplete="off"><small class="hint">Leave empty to show the payslip in their app only.</small></label></div></section>';
+    h += '<button class="btn" data-act="slip-more">' + (ui.slip.more ? 'Hide the extra boxes' : 'Show every box on the payslip (optional)') + '</button>';
+    if (ui.slip.more) {
+      h += '<section class="card"><h2 class="sec-title">Employee</h2><div class="fields2">' + slIn('@fullName', 'Full name on payslip', pay.fullName || st.name, 'text') + slIn('@pps', 'PPS No.', pay.pps, 'text') + '</div></section>';
+      h += '<section class="card"><h2 class="sec-title">Period</h2>' + grid(SL_HEAD.slice(1)) + '</section>';
+      h += '<section class="card"><h2 class="sec-title">Pay elements</h2>' + (sl.el || []).map(function (r, i) {
+        return '<div class="slrow">' + slIn('el.' + i + '.d', 'Description', r.d, 'text') + slIn('el.' + i + '.t', 'Tax (Y/N)', r.t, 'text') + slIn('el.' + i + '.h', 'Hours', r.h) + slIn('el.' + i + '.v', 'Value', r.v) + '<button class="btn danger" data-act="slip-rm" data-k="el.' + i + '">Remove row</button></div>';
+      }).join('') + '<button class="btn" data-act="slip-add" data-k="el">Add pay row</button></section>';
+      h += '<section class="card"><h2 class="sec-title">Deductions: totals to date</h2><div class="fields2">' + (sl.de || []).map(function (r, i) { return slIn('de.' + i + '.tot', (r.d || 'Line ' + (i + 1)) + ' total', r.tot) + slIn('de.' + i + '.t', (r.d || 'Line ' + (i + 1)) + ' tax (Y/N)', r.t, 'text'); }).join('') + '</div></section>';
+      h += '<section class="card"><h2 class="sec-title">Summary</h2>' + grid(SL_SUM.filter(function (f) { return f[0] !== 'gross' && f[0] !== 'nett'; })) + '</section>';
+      h += '<section class="card"><h2 class="sec-title">Cumulative details</h2>' + grid(SL_CUM) + '</section>';
+      h += '<section class="card"><h2 class="sec-title">Tax / PRSI</h2>' + grid(SL_TAX) + '</section>';
+      h += '<section class="card"><h2 class="sec-title">Comments and notes</h2><div class="addform">' + slIn('comments', 'Comments', sl.comments, 'text') + slIn('notes', 'Notes', sl.notes, 'text') + '</div></section>';
+    }
+    h += '<section class="card"><div class="addform"><button class="btn" data-act="slip-preview">See it as the employee will</button>' +
+      '<button class="btn' + (sl.ready ? '' : ' primary') + '" data-act="slip-ready">' + (sl.ready ? 'Ready to send ✓ (tap to hold it back)' : 'Finished: mark ready to send') + '</button>' +
+      '<p class="hint">' + esc(slipWhen()) + '</p>' +
       '<button class="btn danger" data-act="slip-del">' + (ui.slip.delAsk ? 'Tap again to delete this payslip' : 'Delete this payslip') + '</button></div></section>';
     return h;
   }
@@ -607,17 +653,27 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     return '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>Payslips</strong>' +
       '<label class="field"><span>Company name on payslips</span><input type="text" data-f="sl-company" value="' + esc(m.company || '') + '" autocomplete="off"></label>' +
       '<div class="row2"><label class="field"><span>Send every</span><select data-f="sl-day">' + o + '</select></label><label class="field"><span>At</span><select data-f="sl-hour">' + ho + '</select></label></div>' +
-      '<p class="hint">Add each payslip from the employee’s pay card in the Week tab and mark it ready. On the chosen day, ready payslips appear in each employee’s app with a notification. You get a notification the day before (the daily reminder must be on for this phone).</p></div>';
+      '<p class="hint">On the chosen day, ready payslips appear in each employee’s app with a notification. You get a notification the day before (the daily reminder must be on for this phone).</p></div>';
   }
   function slipAct(act, b) {
     var S = ui.slip;
+    if (act === 'slip-copyall') {
+      sortedStaff().forEach(function (e) { var pv0 = slipPrev(ui.wid, e[0]); if (leaveAllWeek(e[1], ui.wid) || slipOf(ui.wid, e[0], false) || !pv0) return; var c = JSON.parse(JSON.stringify(pv0)); c.ready = false; c.payDate = addDays(ui.wid, 6); if (/^\d+$/.test(String(c.period || ''))) c.period = String(Number(c.period) + 1); ensureWeek(ui.wid).slips = ensureWeek(ui.wid).slips || {}; state.weeks[ui.wid].slips[e[0]] = c; });
+      queueSave('weeks', ui.wid, 0); render(); toast('Started from last time’s figures. Open each one, check the numbers, then mark it ready.'); return;
+    }
     if (act === 'slip-open') { var sid = cardSid(b); if (!state.staff[sid]) return; ui.slip = { wid: ui.wid, sid: sid }; slipOf(ui.wid, sid, true); queueSave('weeks', ui.wid, 0); render(); window.scrollTo(0, 0); return; }
     if (!S) return;
     var sl = slipOf(S.wid, S.sid, true), k = b.getAttribute('data-k') || '';
     if (act === 'slip-close') { ui.slip = null; render(); return; }
     if (act === 'slip-preview') { S.preview = true; render(); window.scrollTo(0, 0); return; }
     if (act === 'slip-edit') { S.preview = false; render(); return; }
-    if (act === 'slip-ready') sl.ready = !sl.ready;
+    if (act === 'slip-more') { S.more = !S.more; render(); return; }
+    if (act === 'slip-calc') {
+      var g = num(sl.gross), dd = 0; (sl.de || []).forEach(function (r) { if (!/emp.?er|employer/i.test(String(r.d || ''))) dd += num(r.v); });
+      if (!g) { toast('Enter the Gross Pay first.'); return; }
+      sl.totalDeds = round2(dd).toFixed(2); sl.nett = round2(g - dd + num(sl.nonTaxAdjs) + num(sl.rounding)).toFixed(2);
+    }
+    else if (act === 'slip-ready') { sl.ready = !sl.ready; if (sl.ready) { if (!sl.nett || !sl.gross) { sl.ready = false; toast('Enter the Gross Pay and the Nett Pay first.'); return; } queueSave('weeks', S.wid, 0); ui.slip = null; render(); toast(state.staff[S.sid].name + '’s payslip is ready to send.'); return; } }
     else if (act === 'slip-add') { sl[k] = sl[k] || []; sl[k].push(k === 'el' ? { d: '', t: '', h: '', v: '' } : { d: '', t: '', v: '', tot: '' }); }
     else if (act === 'slip-rm') { var p = k.split('.'); (sl[p[0]] || []).splice(Number(p[1]), 1); }
     else if (act === 'slip-copy') { if (!S.copyAsk) { S.copyAsk = true; render(); return; } S.copyAsk = false; var pv = JSON.parse(JSON.stringify(slipPrev(S.wid, S.sid))); pv.ready = false; pv.payDate = addDays(S.wid, 6); if (/^\d+$/.test(String(pv.period || ''))) pv.period = String(Number(pv.period) + 1); state.weeks[S.wid].slips[S.sid] = pv; }
@@ -636,6 +692,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     if (k.charAt(0) === '@') { var st = state.staff[S.sid]; st.pay = st.pay || {}; st.pay[k.slice(1)] = v; queueSave('staff', S.sid, 400); return true; }
     var sl = slipOf(S.wid, S.sid, true), p = k.split('.');
     if (p.length === 3) { if (sl[p[0]] && sl[p[0]][Number(p[1])]) sl[p[0]][Number(p[1])][p[2]] = v; } else sl[k] = v;
+    if (k === 'gross' && sl.el && sl.el.length === 1) sl.el[0].v = v;
     queueSave('weeks', S.wid, 400); return true;
   }
 
@@ -694,8 +751,8 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       var box = el.closest('.tile, .stats > div, .hist-nums > div, td, th') || el; box.hidden = true;
     });
     Array.prototype.forEach.call(app.querySelectorAll('th'), function (el) { if (/pay|cash|bank|€/i.test(el.textContent)) el.hidden = true; });
-    var bt = document.getElementById('tab-backup'); if (bt) bt.hidden = true;
-    if (ui.tab === 'backup') { ui.tab = 'today'; render(); }
+    ['tab-backup', 'tab-slips'].forEach(function (id) { var bt = document.getElementById(id); if (bt) bt.hidden = true; });
+    if (ui.tab === 'backup' || ui.tab === 'slips') { ui.tab = 'today'; render(); }
   }
   function supHTML() {
     if (isSup()) return '';
@@ -728,7 +785,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Send now</button>' +
         '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
         '<button class="btn" data-act="fb-nudge">Remind all staff to check their times</button>' +
-        remindHTML() + slipSetHTML() + supHTML() +
+        remindHTML() + supHTML() +
         '<button class="btn" data-act="fb-off">Turn off on this phone</button>' +
         '<p class="hint">A few seconds after every change, each employee’s days and times are published to the staff app, and a full private backup of your records is saved online. Staff log in with their phone number and never see pay, rate, bank or cash.</p>';
     } else {
@@ -1082,11 +1139,11 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
 
   /* ---------- views ---------- */
   function updateTabs() {
-    ['today', 'week', 'staff', 'month', 'backup'].forEach(function (t) {
+    ['today', 'week', 'staff', 'month', 'slips', 'backup'].forEach(function (t) {
       document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
     });
   }
-  function render() { renderCore(); if (ui.slip && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; slipButtons(); } applyRole(); branchBar(); }
+  function render() { renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } applyRole(); branchBar(); }
   function renderCore() {
     var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
     if (tabsEl) tabsEl.hidden = sview || !roleKnown;
@@ -1097,7 +1154,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       app.innerHTML = '<p class="muted">Loading your staff and weeks…</p>' + (ui.slow ? '<p class="hint">This is taking longer than usual. Saved data may not be reachable yet.</p>' : '');
       return;
     }
-    app.innerHTML = ui.tab === 'today' ? dayHTML() : ui.tab === 'week' ? weekHTML() : ui.tab === 'staff' ? staffHTML() : ui.tab === 'backup' ? backupHTML() : monthHTML();
+    app.innerHTML = ui.tab === 'today' ? dayHTML() : ui.tab === 'week' ? weekHTML() : ui.tab === 'staff' ? staffHTML() : ui.tab === 'backup' ? backupHTML() : ui.tab === 'slips' ? slipsTabHTML() : monthHTML();
   }
 
   function weekHTML() {
