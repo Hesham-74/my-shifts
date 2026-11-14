@@ -72,6 +72,19 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
 .none { color: var(--ink-2); opacity: .65; }
 .row { display: flex; gap: 10px; flex-wrap: wrap; }
 .row .btn { flex: 1 1 140px; }
+.sllist { display: grid; gap: 8px; }
+.sllist .btn { text-align: start; }
+.slip { display: grid; gap: 8px; }
+.slip h3 { font-size: 17px; margin: 0; }
+.slip h4 { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); margin: 8px 0 0; }
+.slip table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.slk th { text-align: left; font-weight: 500; color: var(--ink-2); padding: 4px 8px 4px 0; width: 50%; }
+.slk td { text-align: right; font-variant-numeric: tabular-nums; padding: 4px 0; font-weight: 600; word-break: break-word; }
+.slk tr + tr th, .slk tr + tr td { border-top: 1px solid var(--line); }
+.slscroll { overflow-x: auto; }
+.slt th { text-align: left; font-size: 12px; color: var(--ink-2); padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.slt td { padding: 5px 6px; border-bottom: 1px solid var(--line); }
+.slt .n { text-align: right; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -132,6 +145,38 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     });
   }
 
+  /* A payslip laid out for reading. The figures are exactly what the employer entered from their payroll. */
+  function slipView(sl) {
+    var m = function (x) { return x === undefined || x === null || x === '' ? '' : String(x); };
+    var kv = function (rows) { return '<table class="slk">' + rows.map(function (r) { return '<tr><th scope="row">' + esc(r[0]) + '</th><td>' + esc(m(r[1])) + '</td></tr>'; }).join('') + '</table>'; };
+    var el = (sl.el || []).filter(function (r) { return r && (r.d || r.v || r.h); }), de = (sl.de || []).filter(function (r) { return r && (r.d || r.v || r.tot); });
+    return '<div class="slip">' +
+      '<h3>' + esc(m(sl.company) || 'Payslip') + '</h3>' +
+      kv([['Name', sl.fullName], ['PPS No.', sl.pps], ['Number', sl.number], ['Dept', sl.dept], ['Cost', sl.cost], ['Freq.', sl.freq], ['Period', sl.period], ['Pay Date', sl.payDate]].filter(function (r) { return m(r[1]); })) +
+      '<h4>Pay Elements</h4><div class="slscroll"><table class="slt"><thead><tr><th>Description</th><th>Tax</th><th>Hours</th><th>Value</th></tr></thead><tbody>' +
+      (el.length ? el.map(function (r) { return '<tr><td>' + esc(m(r.d)) + '</td><td>' + esc(m(r.t)) + '</td><td class="n">' + esc(m(r.h)) + '</td><td class="n">' + esc(m(r.v)) + '</td></tr>'; }).join('') : '<tr><td colspan="4">None</td></tr>') + '</tbody></table></div>' +
+      '<h4>Deductions</h4><div class="slscroll"><table class="slt"><thead><tr><th>Description</th><th>Tax</th><th>Value</th><th>Total</th></tr></thead><tbody>' +
+      (de.length ? de.map(function (r) { return '<tr><td>' + esc(m(r.d)) + '</td><td>' + esc(m(r.t)) + '</td><td class="n">' + esc(m(r.v)) + '</td><td class="n">' + esc(m(r.tot)) + '</td></tr>'; }).join('') : '<tr><td colspan="4">None</td></tr>') + '</tbody></table></div>' +
+      '<h4>Summary</h4>' + kv([['Gross Pay', sl.gross], ['Total Deds', sl.totalDeds], ['Non-Tax Adjs', sl.nonTaxAdjs], ['Rounding', sl.rounding], ['Nett Pay', sl.nett], ['Pay Method', sl.method]]) +
+      '<h4>Cumulative Details</h4>' + kv([['Gross Pay', sl.cGross], ['Non-Tax Deds', sl.cNonTaxDeds], ['Taxable Pay', sl.cTaxable], ['Tax Credit T.D', sl.cTaxCredit], ['Cut-Off T.D', sl.cCutOff], ['Total Tax', sl.cTotalTax]]) +
+      '<h4>Tax/PRSI</h4>' + kv([['Tax Code', sl.taxCode], ['Emer. Start Per.', sl.emerStart], ['Tax Credit T.P', sl.taxCreditTP], ['Pay Rel. Code', sl.payRel], ['Total Insur. Wk.', sl.insurWk], ['Emp’er PRSI Per.', sl.erPrsiPer], ['Emp’er PRSI TD.', sl.erPrsiTD]]) +
+      (m(sl.comments) ? '<h4>Comments</h4><p>' + esc(sl.comments) + '</p>' : '') + (m(sl.notes) ? '<h4>Notes</h4><p>' + esc(sl.notes) + '</p>' : '') + '</div>';
+  }
+
+  /* ---------- payslips released by the employer ---------- */
+  function loadSlips() {
+    if (!saved) return;
+    fetch('/api/payslips?phone=' + encodeURIComponent(saved.phone), { cache: 'no-store', headers: auth() }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      if (j && saved) { var had = (saved.slips || []).length; saved.slips = j.list || []; store(); if (saved.slips.length !== had || ui.slipOpen) render(); }
+    }, function () {});
+  }
+  function slipsHTML() {
+    var l = saved.slips || []; if (!l.length) return '';
+    return '<section class="card"><h2 class="title">My payslips</h2><div class="sllist">' + l.map(function (x, i) {
+      return '<button class="btn" data-act="slip" data-i="' + i + '">Week ' + esc(fShort.format(parse(x.wid)) + ' – ' + fShort.format(parse(addDays(x.wid, 6)))) + (x.slip && x.slip.nett ? ' · Nett ' + esc(x.slip.nett) : '') + '</button>';
+    }).join('') + '</div></section>';
+  }
+
   /* Tell the manager this person has opened their current times. */
   function markSeen() {
     if (!saved || !saved.data || !saved.data.upd || document.visibilityState !== 'visible') return;
@@ -179,7 +224,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     ui.busy = true; setStatus(manual ? 'Updating…' : '');
     fetchDoc(saved.phone).then(function (res) {
       ui.busy = false; ui.online = true;
-      if (res.kind === 'ok') { saved.data = res.data; saved.fetched = Date.now(); store(); ui.phase = 'show'; ui.msg = ''; markSeen(); }
+      if (res.kind === 'ok') { saved.data = res.data; saved.fetched = Date.now(); store(); ui.phase = 'show'; ui.msg = ''; markSeen(); loadSlips(); }
       else if (res.kind === 'notfound') {
         forget(); ui.phase = 'enter'; ui.step = 'phone'; ui.err = true; ui.msg = 'That phone number is not on the staff list. Check with your manager that they saved your number.';
       } else if (res.kind === 'setpin' || res.kind === 'wrongpin') {
@@ -235,6 +280,9 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
       '<p class="hint">Enter the phone number your manager has for you.</p></form>';
   }
   function showHTML() {
+    if (ui.slipOpen !== undefined && ui.slipOpen !== null && (saved.slips || [])[ui.slipOpen]) {
+      return '<button class="btn" data-act="slip-back" style="justify-self:start">Back to my times</button><section class="card">' + slipView(saved.slips[ui.slipOpen].slip || {}) + '</section>';
+    }
     var d = saved.data, today = todayISO(), wk = ui.wk, minWk = mondayOf(addDays(today, -14)), maxWk = addDays(mondayOf(today), 56), nx = nextShift(d);
     var h = '<section class="card"><p class="hi">Hi ' + esc(d.name) + '</p>' + (d.leave ? '<p class="hint" style="margin-bottom:8px"><strong>You are marked as on leave.</strong> Tell your manager when you are back.</p>' : '') + (nx ?
       '<div class="next"><b>' + (nx.live ? 'Working now' : 'Next shift') + '</b><span class="big">' + esc(times(nx.s)) + '</span><span class="when">' + esc(fDay.format(nx.st) + ' ' + fShort.format(nx.st)) + '</span></div>' :
@@ -249,7 +297,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
         (d.off.indexOf(ds) > -1 ? '<span class="off">Day off</span>' : '<span class="none">Not scheduled</span>');
       h += '<li class="day' + (ds === today ? ' today' : '') + '"><div class="d"><b>' + fDay.format(dt) + '</b><span>' + fShort.format(dt) + '</span></div><div class="t">' + body + '</div></li>';
     }
-    h += '</ul></section><div class="row"><button class="btn" data-act="this">This week</button><button class="btn" data-act="refresh">Refresh</button></div>' + pushHTML() +
+    h += '</ul></section><div class="row"><button class="btn" data-act="this">This week</button><button class="btn" data-act="refresh">Refresh</button></div>' + slipsHTML() + pushHTML() +
       '<section class="card"><p style="margin-bottom:10px">Worked a day that is not shown here?</p><button class="btn" data-act="ask">Tell my manager my hours are missing</button><p class="msg' + (ui.askErr ? ' err' : '') + '" role="status">' + esc(ui.askMsg || '') + '</p></section>';
     var upd = d.upd ? new Date(d.upd) : null;
     h += '<p class="hint">' + (ui.online ? '' : 'You are offline. Showing the last times saved on this phone. ') +
@@ -302,6 +350,8 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     else if (a === 'this') { ui.wk = mondayOf(todayISO()); render(); }
     else if (a === 'refresh') refresh(true);
     else if (a === 'push-on') pushOn();
+    else if (a === 'slip') { ui.slipOpen = Number(b.getAttribute('data-i')); render(); window.scrollTo(0, 0); }
+    else if (a === 'slip-back') { ui.slipOpen = null; render(); }
     else if (a === 'ask') {
       ui.askMsg = 'Sending…'; ui.askErr = false; render();
       post('ask', { phone: saved.phone }, auth()).then(function (r) {

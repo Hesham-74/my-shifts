@@ -240,6 +240,21 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
 .coderow .cbtns .btn { flex: 1 1 120px; }
 .hint.seen:empty { display: none; }
 .branchbar select { font-weight: 600; }
+.fields2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.slrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.slrow:first-of-type { border-top: 0; padding-top: 0; }
+.slrow .btn { grid-column: 1 / -1; }
+.slip { display: grid; gap: 8px; }
+.slip h3 { font-size: 17px; margin: 0; }
+.slip h4 { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); margin: 8px 0 0; }
+.slip table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.slk th { text-align: left; font-weight: 500; color: var(--ink-2); padding: 4px 8px 4px 0; width: 50%; }
+.slk td { text-align: right; font-variant-numeric: tabular-nums; padding: 4px 0; font-weight: 600; word-break: break-word; }
+.slk tr + tr th, .slk tr + tr td { border-top: 1px solid var(--line); }
+.slscroll { overflow-x: auto; }
+.slt th { text-align: left; font-size: 12px; color: var(--ink-2); padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.slt td { padding: 5px 6px; border-bottom: 1px solid var(--line); }
+.slt .n { text-align: right; font-variant-numeric: tabular-nums; }
 .brrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
 .hint.seen.wait { color: var(--bad); font-weight: 600; }
 .hint.seen.ok { color: var(--good); font-weight: 600; }
@@ -306,7 +321,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
 
   /* ---------- state + storage ---------- */
   var DEF_CFG = { lunch: 0, otAfter: 40, otPremium: 0 };
-  var state = { staff: {}, weeks: {}, branches: {} };
+  var state = { staff: {}, weeks: {}, branches: {}, settings: {} };
   var DB = null, mode = 'loading';
   var loaded = { staff: false, weeks: false };
   var loadTimer = null;
@@ -318,7 +333,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   var LS = 'weekly-staff-pay-v1';
   var memOnly = false;
 
-  function localLoad() { try { var j = localStorage.getItem(LS); if (j) { var o = JSON.parse(j); state.staff = o.staff || {}; state.weeks = o.weeks || {}; state.branches = o.branches || {}; } } catch (e) { memOnly = true; } }
+  function localLoad() { try { var j = localStorage.getItem(LS); if (j) { var o = JSON.parse(j); state.staff = o.staff || {}; state.weeks = o.weeks || {}; state.branches = o.branches || {}; state.settings = o.settings || {}; } } catch (e) { memOnly = true; } }
   function localSave() { try { localStorage.setItem(LS, JSON.stringify(state)); return true; } catch (e) { memOnly = true; return false; } }
 
   function setStatus(kind) {
@@ -415,7 +430,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   function netPayload() {
     var schedules = {};
     Object.keys(state.staff).forEach(function (sid) { var k = phoneKey(state.staff[sid].phone); if (k.length >= 7 && !schedules[k]) schedules[k] = buildSchedule(sid); });
-    return { schedules: schedules, today: todayISO(), baseRev: netCfg().rev || 0, backup: hasData() ? { staff: state.staff, weeks: state.weeks, branches: state.branches || {} } : null };
+    return { schedules: schedules, today: todayISO(), baseRev: netCfg().rev || 0, backup: hasData() ? { staff: state.staff, weeks: state.weeks, branches: state.branches || {}, settings: state.settings || {} } : null };
   }
   function scheduleSync() {
     ensureCodesLocal();
@@ -428,16 +443,17 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   function isSup() { return fbOn() && netCfg().role === 'supervisor'; }
   /* Take the server's records, then put this phone's unsent changes back on top. */
   function adopt(server) {
-    var next = { staff: server.staff || {}, weeks: server.weeks || {}, branches: server.branches || {} }, d = netCfg().dirty || {};
+    var next = { staff: server.staff || {}, weeks: server.weeks || {}, branches: server.branches || {}, settings: server.settings || {} }, d = netCfg().dirty || {};
     if (!state.branches) state.branches = {};
+    if (!state.settings) state.settings = {};
     Object.keys(d).forEach(function (k) {
       var i = k.indexOf('/'), kind = k.slice(0, i), id = k.slice(i + 1);
-      if (kind !== 'staff' && kind !== 'weeks' && kind !== 'branches') return;
+      if (kind !== 'staff' && kind !== 'weeks' && kind !== 'branches' && kind !== 'settings') return;
       if (isSup() && kind !== 'weeks') return;
       if (state[kind][id] !== undefined) next[kind][id] = state[kind][id]; else delete next[kind][id];
     });
     Object.keys(pending).forEach(function (k) { clearTimeout(pending[k].timer); delete pending[k]; });
-    state.staff = next.staff; state.weeks = next.weeks; state.branches = next.branches; ensureBranches(); ensureCodesLocal(); localSave();
+    state.staff = next.staff; state.weeks = next.weeks; state.branches = next.branches; state.settings = next.settings; ensureBranches(); ensureCodesLocal(); localSave();
     netSet({ rev: server.rev || 0 });
     /* Nothing unsent here: what this phone holds is what the server holds, so there is nothing to send back. */
     if (Object.keys(d).length) netRun.lastSig = ''; else { var pl = netPayload(); netRun.lastSig = canon({ s: pl.schedules, b: pl.backup }); }
@@ -502,9 +518,125 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     return netApi('GET', 'backup').then(function (o) {
       if (!o || o.app !== 'weekly-staff-pay' || typeof o.staff !== 'object' || typeof o.weeks !== 'object') throw new Error('bad backup');
       Object.keys(pending).forEach(function (k) { clearTimeout(pending[k].timer); delete pending[k]; });
-      state.staff = o.staff || {}; state.weeks = o.weeks || {}; state.branches = o.branches || {}; ensureBranches(); ensureCodesLocal(); localSave();
+      state.staff = o.staff || {}; state.weeks = o.weeks || {}; state.branches = o.branches || {}; state.settings = o.settings || {}; ensureBranches(); ensureCodesLocal(); localSave();
       return o;
     });
+  }
+
+  /* A payslip laid out for reading. The figures are exactly what the employer entered from their payroll. */
+  function slipView(sl) {
+    var m = function (x) { return x === undefined || x === null || x === '' ? '' : String(x); };
+    var kv = function (rows) { return '<table class="slk">' + rows.map(function (r) { return '<tr><th scope="row">' + esc(r[0]) + '</th><td>' + esc(m(r[1])) + '</td></tr>'; }).join('') + '</table>'; };
+    var el = (sl.el || []).filter(function (r) { return r && (r.d || r.v || r.h); }), de = (sl.de || []).filter(function (r) { return r && (r.d || r.v || r.tot); });
+    return '<div class="slip">' +
+      '<h3>' + esc(m(sl.company) || 'Payslip') + '</h3>' +
+      kv([['Name', sl.fullName], ['PPS No.', sl.pps], ['Number', sl.number], ['Dept', sl.dept], ['Cost', sl.cost], ['Freq.', sl.freq], ['Period', sl.period], ['Pay Date', sl.payDate]].filter(function (r) { return m(r[1]); })) +
+      '<h4>Pay Elements</h4><div class="slscroll"><table class="slt"><thead><tr><th>Description</th><th>Tax</th><th>Hours</th><th>Value</th></tr></thead><tbody>' +
+      (el.length ? el.map(function (r) { return '<tr><td>' + esc(m(r.d)) + '</td><td>' + esc(m(r.t)) + '</td><td class="n">' + esc(m(r.h)) + '</td><td class="n">' + esc(m(r.v)) + '</td></tr>'; }).join('') : '<tr><td colspan="4">None</td></tr>') + '</tbody></table></div>' +
+      '<h4>Deductions</h4><div class="slscroll"><table class="slt"><thead><tr><th>Description</th><th>Tax</th><th>Value</th><th>Total</th></tr></thead><tbody>' +
+      (de.length ? de.map(function (r) { return '<tr><td>' + esc(m(r.d)) + '</td><td>' + esc(m(r.t)) + '</td><td class="n">' + esc(m(r.v)) + '</td><td class="n">' + esc(m(r.tot)) + '</td></tr>'; }).join('') : '<tr><td colspan="4">None</td></tr>') + '</tbody></table></div>' +
+      '<h4>Summary</h4>' + kv([['Gross Pay', sl.gross], ['Total Deds', sl.totalDeds], ['Non-Tax Adjs', sl.nonTaxAdjs], ['Rounding', sl.rounding], ['Nett Pay', sl.nett], ['Pay Method', sl.method]]) +
+      '<h4>Cumulative Details</h4>' + kv([['Gross Pay', sl.cGross], ['Non-Tax Deds', sl.cNonTaxDeds], ['Taxable Pay', sl.cTaxable], ['Tax Credit T.D', sl.cTaxCredit], ['Cut-Off T.D', sl.cCutOff], ['Total Tax', sl.cTotalTax]]) +
+      '<h4>Tax/PRSI</h4>' + kv([['Tax Code', sl.taxCode], ['Emer. Start Per.', sl.emerStart], ['Tax Credit T.P', sl.taxCreditTP], ['Pay Rel. Code', sl.payRel], ['Total Insur. Wk.', sl.insurWk], ['Emp’er PRSI Per.', sl.erPrsiPer], ['Emp’er PRSI TD.', sl.erPrsiTD]]) +
+      (m(sl.comments) ? '<h4>Comments</h4><p>' + esc(sl.comments) + '</p>' : '') + (m(sl.notes) ? '<h4>Notes</h4><p>' + esc(sl.notes) + '</p>' : '') + '</div>';
+  }
+
+  /* ---------- payslips: the owner copies in the figures from their payroll; the app releases them weekly ---------- */
+  var SL_HEAD = [['payDate', 'Pay date', 'date'], ['period', 'Period'], ['freq', 'Freq.'], ['number', 'Number'], ['dept', 'Dept'], ['cost', 'Cost']];
+  var SL_SUM = [['gross', 'Gross Pay'], ['totalDeds', 'Total Deds'], ['nonTaxAdjs', 'Non-Tax Adjs'], ['rounding', 'Rounding'], ['nett', 'Nett Pay'], ['method', 'Pay Method', 'text']];
+  var SL_CUM = [['cGross', 'Gross Pay'], ['cNonTaxDeds', 'Non-Tax Deds'], ['cTaxable', 'Taxable Pay'], ['cTaxCredit', 'Tax Credit T.D'], ['cCutOff', 'Cut-Off T.D'], ['cTotalTax', 'Total Tax']];
+  var SL_TAX = [['taxCode', 'Tax Code', 'text'], ['emerStart', 'Emer. Start Per.'], ['taxCreditTP', 'Tax Credit T.P'], ['payRel', 'Pay Rel. Code', 'text'], ['insurWk', 'Total Insur. Wk.'], ['erPrsiPer', 'Emp’er PRSI Per.'], ['erPrsiTD', 'Emp’er PRSI TD.']];
+  function mainSet() { if (!state.settings) state.settings = {}; if (!state.settings.main) state.settings.main = {}; return state.settings.main; }
+  function slipOf(wid, sid, make) {
+    var w = make ? ensureWeek(wid) : state.weeks[wid]; if (!w) return null;
+    if (!w.slips) { if (!make) return null; w.slips = {}; }
+    if (!w.slips[sid] && make) w.slips[sid] = { freq: 'W', payDate: addDays(wid, 6), method: 'Credit Transfer', el: [{ d: 'Basic', t: 'Y', h: '', v: '' }], de: [{ d: 'Tax', t: '', v: '', tot: '' }, { d: 'PRSI EE', t: '', v: '', tot: '' }, { d: 'USC', t: '', v: '', tot: '' }] };
+    return w.slips[sid] || null;
+  }
+  function slipPrev(wid, sid) {
+    var best = null; Object.keys(state.weeks).sort().forEach(function (k) { if (k < wid && state.weeks[k].slips && state.weeks[k].slips[sid]) best = state.weeks[k].slips[sid]; });
+    return best;
+  }
+  function slipButtons() {
+    if (isSup() || ui.tab !== 'week') return;
+    Array.prototype.forEach.call(app.querySelectorAll('.pay[data-sid]'), function (card) {
+      var sid = card.getAttribute('data-sid'); if (!state.staff[sid]) return;
+      var sl = slipOf(ui.wid, sid, false), b = document.createElement('button');
+      b.className = 'btn'; b.setAttribute('data-act', 'slip-open'); b.style.marginTop = '10px'; b.style.width = '100%';
+      b.textContent = sl ? (sl.ready ? 'Payslip: ready to send' : 'Payslip: started, not ready') : 'Add payslip';
+      card.appendChild(b);
+    });
+  }
+  function slIn(k, label, val, type) {
+    return '<label class="field"><span>' + esc(label) + '</span><input type="' + (type === 'date' ? 'date' : 'text') + '"' + (type || type === 'text' ? '' : ' inputmode="decimal" class="num"') + ' data-f="sl-f" data-k="' + esc(k) + '" value="' + esc(val === undefined || val === null ? '' : val) + '" autocomplete="off"></label>';
+  }
+  function slipHTML() {
+    var wid = ui.slip.wid, sid = ui.slip.sid, st = state.staff[sid], sl = slipOf(wid, sid, true), pay = st.pay || {};
+    if (ui.slip.preview) {
+      var full = JSON.parse(JSON.stringify(sl)); full.fullName = pay.fullName || st.name; full.pps = pay.pps || ''; full.company = mainSet().company || '';
+      return '<section class="card">' + slipView(full) + '</section><button class="btn primary" data-act="slip-edit">Back to editing</button>';
+    }
+    var grid = function (list) { return '<div class="fields2">' + list.map(function (f) { return slIn(f[0], f[1], sl[f[0]], f[2]); }).join('') + '</div>'; };
+    var h = '<section class="card nudge"><div><strong>Payslip: ' + esc(st.name) + '</strong><p class="hint">Week ' + esc(fShort.format(parse(wid)) + ' – ' + fShort.format(parse(addDays(wid, 6)))) + '. Copy the figures from your payroll payslip. The app does not work out tax.</p></div><button class="btn" data-act="slip-close">Done</button></section>';
+    if (slipPrev(wid, sid)) h += '<button class="btn" data-act="slip-copy">' + (ui.slip.copyAsk ? 'Tap again: replaces what is typed here' : 'Copy from this person’s last payslip') + '</button>';
+    h += '<section class="card"><h2 class="sec-title">Employee</h2><div class="fields2">' + slIn('@fullName', 'Full name on payslip', pay.fullName || st.name, 'text') + slIn('@pps', 'PPS No.', pay.pps, 'text') + slIn('@email', 'Email (for sending payslips)', pay.email, 'text') + '</div><p class="hint" style="margin-top:8px">Saved with the employee and reused every week.</p></section>';
+    h += '<section class="card"><h2 class="sec-title">Period</h2>' + grid(SL_HEAD) + '</section>';
+    h += '<section class="card"><h2 class="sec-title">Pay elements</h2>' + (sl.el || []).map(function (r, i) {
+      return '<div class="slrow">' + slIn('el.' + i + '.d', 'Description', r.d, 'text') + slIn('el.' + i + '.t', 'Tax (Y/N)', r.t, 'text') + slIn('el.' + i + '.h', 'Hours', r.h) + slIn('el.' + i + '.v', 'Value', r.v) + '<button class="btn danger" data-act="slip-rm" data-k="el.' + i + '">Remove row</button></div>';
+    }).join('') + '<button class="btn" data-act="slip-add" data-k="el">Add pay row</button></section>';
+    h += '<section class="card"><h2 class="sec-title">Deductions</h2>' + (sl.de || []).map(function (r, i) {
+      return '<div class="slrow">' + slIn('de.' + i + '.d', 'Description', r.d, 'text') + slIn('de.' + i + '.t', 'Tax (Y/N)', r.t, 'text') + slIn('de.' + i + '.v', 'Value', r.v) + slIn('de.' + i + '.tot', 'Total to date', r.tot) + '<button class="btn danger" data-act="slip-rm" data-k="de.' + i + '">Remove row</button></div>';
+    }).join('') + '<button class="btn" data-act="slip-add" data-k="de">Add deduction row</button><p class="hint" style="margin-top:8px">For example Tax, PRSI EE, USC, MyFuture Fund, Emp’er Cont.</p></section>';
+    h += '<section class="card"><h2 class="sec-title">Summary</h2>' + grid(SL_SUM) + '</section>';
+    h += '<section class="card"><h2 class="sec-title">Cumulative details</h2>' + grid(SL_CUM) + '</section>';
+    h += '<section class="card"><h2 class="sec-title">Tax / PRSI</h2>' + grid(SL_TAX) + '</section>';
+    h += '<section class="card"><h2 class="sec-title">Comments and notes</h2><div class="addform">' + slIn('comments', 'Comments', sl.comments, 'text') + slIn('notes', 'Notes', sl.notes, 'text') + '</div></section>';
+    h += '<section class="card"><div class="addform"><button class="btn" data-act="slip-preview">See how the employee will see it</button>' +
+      '<button class="btn' + (sl.ready ? '' : ' primary') + '" data-act="slip-ready">' + (sl.ready ? 'Marked ready. Tap to hold it back' : 'Mark ready to send') + '</button>' +
+      '<p class="hint">Only payslips marked ready are sent, on the day you chose in the Staff tab. ' + esc(slipWhen()) + '</p>' +
+      '<button class="btn danger" data-act="slip-del">' + (ui.slip.delAsk ? 'Tap again to delete this payslip' : 'Delete this payslip') + '</button></div></section>';
+    return h;
+  }
+  var DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  function slipWhen() { var m = mainSet(); return m.slipDay === undefined || m.slipDay === '' || m.slipDay === null ? 'Weekly sending is off.' : 'Sent every ' + DOW[Number(m.slipDay)] + ' at ' + pad(Number(m.slipHour) || 0) + ':00.'; }
+  function slipSetHTML() {
+    if (isSup()) return '';
+    var m = mainSet(), d = m.slipDay === undefined || m.slipDay === null ? '' : String(m.slipDay), hr = Number(m.slipHour) || 0, o = '<option value=""' + (d === '' ? ' selected' : '') + '>Off</option>', ho = '';
+    for (var i = 1; i <= 7; i++) { var k = i % 7; o += '<option value="' + k + '"' + (d === String(k) ? ' selected' : '') + '>' + DOW[k] + '</option>'; }
+    for (var j = 0; j < 24; j++) ho += '<option value="' + j + '"' + (j === hr ? ' selected' : '') + '>' + pad(j) + ':00</option>';
+    return '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>Payslips</strong>' +
+      '<label class="field"><span>Company name on payslips</span><input type="text" data-f="sl-company" value="' + esc(m.company || '') + '" autocomplete="off"></label>' +
+      '<div class="row2"><label class="field"><span>Send every</span><select data-f="sl-day">' + o + '</select></label><label class="field"><span>At</span><select data-f="sl-hour">' + ho + '</select></label></div>' +
+      '<p class="hint">Add each payslip from the employee’s pay card in the Week tab and mark it ready. On the chosen day, ready payslips appear in each employee’s app with a notification. You get a notification the day before (the daily reminder must be on for this phone).</p></div>';
+  }
+  function slipAct(act, b) {
+    var S = ui.slip;
+    if (act === 'slip-open') { var sid = cardSid(b); if (!state.staff[sid]) return; ui.slip = { wid: ui.wid, sid: sid }; slipOf(ui.wid, sid, true); queueSave('weeks', ui.wid, 0); render(); window.scrollTo(0, 0); return; }
+    if (!S) return;
+    var sl = slipOf(S.wid, S.sid, true), k = b.getAttribute('data-k') || '';
+    if (act === 'slip-close') { ui.slip = null; render(); return; }
+    if (act === 'slip-preview') { S.preview = true; render(); window.scrollTo(0, 0); return; }
+    if (act === 'slip-edit') { S.preview = false; render(); return; }
+    if (act === 'slip-ready') sl.ready = !sl.ready;
+    else if (act === 'slip-add') { sl[k] = sl[k] || []; sl[k].push(k === 'el' ? { d: '', t: '', h: '', v: '' } : { d: '', t: '', v: '', tot: '' }); }
+    else if (act === 'slip-rm') { var p = k.split('.'); (sl[p[0]] || []).splice(Number(p[1]), 1); }
+    else if (act === 'slip-copy') { if (!S.copyAsk) { S.copyAsk = true; render(); return; } S.copyAsk = false; var pv = JSON.parse(JSON.stringify(slipPrev(S.wid, S.sid))); pv.ready = false; pv.payDate = addDays(S.wid, 6); if (/^\d+$/.test(String(pv.period || ''))) pv.period = String(Number(pv.period) + 1); state.weeks[S.wid].slips[S.sid] = pv; }
+    else if (act === 'slip-del') { if (!S.delAsk) { S.delAsk = true; render(); return; } delete state.weeks[S.wid].slips[S.sid]; ui.slip = null; }
+    queueSave('weeks', S.wid, 0); render();
+  }
+  function slipInput(f, t) {
+    if (f === 'sl-company' || f === 'sl-day' || f === 'sl-hour') {
+      var m = mainSet();
+      if (f === 'sl-company') m.company = t.value.trim(); else if (f === 'sl-day') m.slipDay = t.value === '' ? '' : Number(t.value); else m.slipHour = Number(t.value) || 0;
+      try { m.tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { m.tz = 'UTC'; }
+      queueSave('settings', 'main', 300); return true;
+    }
+    if (f !== 'sl-f' || !ui.slip) return false;
+    var S = ui.slip, k = t.getAttribute('data-k'), v = t.value.trim();
+    if (k.charAt(0) === '@') { var st = state.staff[S.sid]; st.pay = st.pay || {}; st.pay[k.slice(1)] = v; queueSave('staff', S.sid, 400); return true; }
+    var sl = slipOf(S.wid, S.sid, true), p = k.split('.');
+    if (p.length === 3) { if (sl[p[0]] && sl[p[0]][Number(p[1])]) sl[p[0]][Number(p[1])][p[2]] = v; } else sl[k] = v;
+    queueSave('weeks', S.wid, 400); return true;
   }
 
   /* ---------- branches ---------- */
@@ -596,7 +728,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Send now</button>' +
         '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
         '<button class="btn" data-act="fb-nudge">Remind all staff to check their times</button>' +
-        remindHTML() + supHTML() +
+        remindHTML() + slipSetHTML() + supHTML() +
         '<button class="btn" data-act="fb-off">Turn off on this phone</button>' +
         '<p class="hint">A few seconds after every change, each employee’s days and times are published to the staff app, and a full private backup of your records is saved online. Staff log in with their phone number and never see pay, rate, bank or cash.</p>';
     } else {
@@ -658,6 +790,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   }
 
   function fbAct(act, b) {
+    if (act.indexOf('slip-') === 0) { if (!isSup()) slipAct(act, b); return; }
     if (act === 'code-send') {
       var sid = cardSid(b), s = state.staff[sid]; if (!s) return;
       if (phoneKey(s.phone).length < 7) { toast('Enter ' + s.name + '’s phone number first.'); return; }
@@ -740,6 +873,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     }
   }
   function fbInput(f, t) {
+    if (slipInput(f, t)) return true;
     if (f === 'fb-pw') { ui.netPw = t.value; return true; }
     if (f === 'fb-hour' || f === 'sup-pw' || f === 'br-new') return true;
     if (f === 'br-sel') { setSetting('branch', t.value); ui.confirmRm = null; render(); return true; }
@@ -952,7 +1086,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
     });
   }
-  function render() { renderCore(); applyRole(); branchBar(); }
+  function render() { renderCore(); if (ui.slip && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; slipButtons(); } applyRole(); branchBar(); }
   function renderCore() {
     var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
     if (tabsEl) tabsEl.hidden = sview || !roleKnown;
@@ -1342,7 +1476,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       sortedStaff().filter(function (e) { return !onLeave(e[1], ui.day); }).forEach(function (e) { if (!findShift(dayWid(), e[0], ui.day) && !isOff(dayWid(), e[0], ui.day)) { var u2 = usualFor(e[0]); setDayTimes(e[0], u2.inT, u2.outT); } });
       refreshDay();
     }
-    else if (/^(code|fb|sup|br|leave)-/.test(act)) fbAct(act, b);
+    else if (/^(code|fb|sup|br|leave|slip)-/.test(act)) fbAct(act, b);
     else if (act === 'bk-email') backupEmail();
     else if (act === 'bk-save') { if (downloadBackup()) { markBackup(); ui.bkMsg = 'Backup file saved to your phone.'; ui.bkErr = false; } else { ui.bkMsg = 'Could not create the backup file.'; ui.bkErr = true; } render(); }
     else if (act === 'bk-restore-yes') restoreApply();
@@ -1456,7 +1590,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       '<p class="hint">Email yourself a copy so your records are safe if you lose or change your phone.</p></div>' +
       '<button class="btn primary" data-act="tab" data-tab="backup">Back up</button></section>';
   }
-  function backupPayload() { return { app: 'weekly-staff-pay', version: 1, exportedAt: new Date().toISOString(), staff: state.staff, weeks: state.weeks, branches: state.branches || {} }; }
+  function backupPayload() { return { app: 'weekly-staff-pay', version: 1, exportedAt: new Date().toISOString(), staff: state.staff, weeks: state.weeks, branches: state.branches || {}, settings: state.settings || {} }; }
   function backupName() { return 'staff-pay-backup-' + todayISO() + '.json'; }
   function summaryText() {
     var ids = Object.keys(state.weeks).filter(function (id) { return (state.weeks[id].shifts || []).length; }).sort().reverse();
@@ -1529,7 +1663,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   function restoreApply() {
     var r = ui.restore; if (!r) return;
     Object.keys(pending).forEach(function (k) { clearTimeout(pending[k].timer); delete pending[k]; });
-    state.staff = r.data.staff || {}; state.weeks = r.data.weeks || {}; state.branches = r.data.branches || {}; ensureBranches(); ensureCodesLocal();
+    state.staff = r.data.staff || {}; state.weeks = r.data.weeks || {}; state.branches = r.data.branches || {}; state.settings = r.data.settings || {}; ensureBranches(); ensureCodesLocal();
     var ok = localSave(); scheduleSync(); ui.restore = null; ui.confirmRm = null;
     ui.bkMsg = ok ? 'Restored ' + Object.keys(state.staff).length + ' employees and ' + Object.keys(state.weeks).length + ' weeks.' : 'Restored, but this device could not save it.';
     ui.bkErr = !ok; setStatus(ok ? 'saved' : 'error'); render();
