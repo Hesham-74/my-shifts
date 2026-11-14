@@ -31,11 +31,22 @@ function cleanSchedule(s) {
     .slice(0, 400)
     .map((x) => ({ d: x.d, i: x.i, o: TIME.test(x.o) ? x.o : '' }));
   const off = (Array.isArray(s && s.off) ? s.off : []).filter((d) => DATE.test(d)).slice(0, 400);
-  return { name: String((s && s.name) || '').slice(0, 80), shifts, off };
+  return { name: String((s && s.name) || '').slice(0, 80), shifts, off, leave: !!(s && s.leave) };
 }
 // The part of a schedule an employee should be told about: today and later.
 const futureSig = (s, today) => JSON.stringify([s.shifts.filter((x) => x.d >= today), s.off.filter((d) => d >= today)]);
-const fullSig = (s) => JSON.stringify([s.name, s.shifts, s.off]);
+const fullSig = (s) => JSON.stringify([s.name, s.shifts, s.off, !!s.leave]);
+// What a supervisor's phone receives: everything except money (rates, bank, cash).
+const noMoney = (st) => {
+  const staff = {}, weeks = {};
+  Object.keys(st.staff || {}).forEach((id) => { const { rate, bank, ...rest } = st.staff[id]; staff[id] = rest; });
+  Object.keys(st.weeks || {}).forEach((wid) => {
+    const w = st.weeks[wid], snap = {};
+    Object.keys(w.snap || {}).forEach((sid) => { const { rate, bank, ...rest } = w.snap[sid]; snap[sid] = rest; });
+    weeks[wid] = { ...w, snap, cash: {} };
+  });
+  return { staff, weeks, branches: st.branches || {} };
+};
 
 export default async (req) => {
   const url = new URL(req.url);
@@ -46,6 +57,7 @@ export default async (req) => {
   const subs = getStore({ name: 'subs', consistency: 'strong' });
   const seen = getStore({ name: 'seen', consistency: 'strong' });
   const pins = getStore({ name: 'pins', consistency: 'strong' });
+  const asks = getStore({ name: 'asks', consistency: 'strong' });
 
   // Employee check: 'ok', 'setpin' (no code yet), 'wrongpin', or 'locked' (too many wrong tries).
   const staffAuth = async (k) => {
@@ -88,7 +100,8 @@ export default async (req) => {
       const d = await sch.get(k, { type: 'json' }); if (!d) continue;
       const sn = await seen.get(k, { type: 'json' });
       const sl = (await subs.get(k, { type: 'json' })) || [];
-      out[k] = { pin: !!(await pins.get(k, { type: 'json' })), chg: d.chg || null, seen: sn && sn.upd === d.upd ? sn.at : null, lastSeen: sn ? sn.at : null, push: sl.length > 0 };
+      const ak = await asks.get(k, { type: 'json' });
+      out[k] = { ask: ak ? ak.at : null, pin: !!(await pins.get(k, { type: 'json' })), chg: d.chg || null, seen: sn && sn.upd === d.upd ? sn.at : null, lastSeen: sn ? sn.at : null, push: sl.length > 0 };
     }
     return out;
   };
@@ -107,7 +120,7 @@ export default async (req) => {
   const sharedState = async () => {
     const meta = (await bak.get('meta', { type: 'json' })) || {};
     const doc = await bak.get('latest', { type: 'json' });
-    return { rev: meta.rev || 0, staff: doc ? doc.staff : {}, weeks: doc ? doc.weeks : {}, has: !!doc };
+    return { rev: meta.rev || 0, staff: doc ? doc.staff : {}, weeks: doc ? doc.weeks : {}, branches: doc && doc.branches ? doc.branches : {}, has: !!doc };
   };
 
   try {
@@ -201,12 +214,12 @@ export default async (req) => {
       const body = JSON.parse(text);
       // Someone else saved since this phone last looked: hand back the newest records so it can merge and resend.
       const cur = await sharedState();
-      if (cur.has && cur.rev > 0 && body.baseRev !== cur.rev) return json({ error: 'stale', rev: cur.rev, staff: cur.staff, weeks: cur.weeks }, 409);
+      if (cur.has && cur.rev > 0 && body.baseRev !== cur.rev) return json({ error: 'stale', rev: cur.rev, ...(role === 'supervisor' ? noMoney(cur) : { staff: cur.staff, weeks: cur.weeks, branches: cur.branches }) }, 409);
       if (role === 'supervisor' && !cur.has) return json({ error: 'nodata' }, 409);
       const want = {};
       Object.keys(body.schedules || {}).slice(0, 300).forEach((p) => { const k = phoneKey(p); if (k.length >= 7 && !want[k]) want[k] = cleanSchedule(body.schedules[p]); });
       const { blobs } = await sch.list();
-      for (const b of blobs) if (!want[b.key]) { await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); await pins.delete(b.key); }
+      for (const b of blobs) if (!want[b.key]) { await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); await pins.delete(b.key); await asks.delete(b.key); }
       const now = new Date().toISOString();
       const today = DATE.test(body.today) ? body.today : now.slice(0, 10);
       let notified = 0;
@@ -219,16 +232,17 @@ export default async (req) => {
         const changedAhead = prev ? futureSig(prev, today) !== futureSig(next, today) : (next.shifts.some((x) => x.d >= today) || next.off.some((d) => d >= today));
         if (changedAhead) { next.chg = now; }
         await sch.setJSON(k, next);
+        await asks.delete(k);
         if (changedAhead && prev) { try { notified += await notify(k); } catch (e) { /* a failed notification never blocks saving */ } }
       }
       let backedUp = false;
       const bk = body.backup;
       let rev = cur.rev;
       if (bk && bk.staff && bk.weeks && typeof bk.staff === 'object' && typeof bk.weeks === 'object' && (Object.keys(bk.staff).length || Object.keys(bk.weeks).length)) {
-        let staff = bk.staff, weeks = bk.weeks;
+        let staff = bk.staff, weeks = bk.weeks, branches = bk.branches && typeof bk.branches === 'object' ? bk.branches : cur.branches;
         if (role === 'supervisor') {
           // A supervisor records hours and days off. Staff, rates, bank, cash and week settings stay as the manager left them.
-          staff = cur.staff; weeks = {};
+          staff = cur.staff; weeks = {}; branches = cur.branches;
           const ids = Object.keys(cur.weeks).sort(), lastCfg = ids.length ? cur.weeks[ids[ids.length - 1]].cfg : null;
           Object.keys(cur.weeks).forEach((wid) => { weeks[wid] = cur.weeks[wid]; });
           Object.keys(bk.weeks).forEach((wid) => {
@@ -244,7 +258,7 @@ export default async (req) => {
           });
         }
         const at = new Date().toISOString();
-        const doc = { app: 'weekly-staff-pay', version: 1, exportedAt: at, staff, weeks };
+        const doc = { app: 'weekly-staff-pay', version: 1, exportedAt: at, staff, weeks, branches };
         rev = cur.rev + 1;
         await bak.setJSON('latest', doc);
         await bak.setJSON('day-' + at.slice(0, 10), doc);
@@ -259,7 +273,7 @@ export default async (req) => {
       if (!role) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
       const cur = await sharedState();
       if (String(cur.rev) === url.searchParams.get('rev')) return json({ ok: true, same: true, rev: cur.rev, role });
-      return json({ ok: true, rev: cur.rev, role, has: cur.has, staff: cur.staff, weeks: cur.weeks });
+      return json({ ok: true, rev: cur.rev, role, has: cur.has, ...(role === 'supervisor' ? noMoney(cur) : { staff: cur.staff, weeks: cur.weeks, branches: cur.branches }) });
     }
 
     if (path === 'supervisor' && req.method === 'POST') {
@@ -298,6 +312,27 @@ export default async (req) => {
       list.push({ endpoint: sub.endpoint, keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } });
       await subs.setJSON(k, list.slice(-5));
       return json({ ok: true });
+    }
+
+    if (path === 'ask' && req.method === 'POST') {
+      // An employee says their hours are missing: tell the manager's phone(s).
+      const body = JSON.parse((await req.text()).slice(0, 300));
+      const k = phoneKey(body.phone);
+      const d = k.length >= 7 ? await sch.get(k, { type: 'json' }) : null;
+      if (!d) return json({ error: 'notfound' }, 404);
+      const a = await staffAuth(k); if (a !== 'ok') return denied(a);
+      const prev = await asks.get(k, { type: 'json' });
+      if (prev && Date.now() - Date.parse(prev.at) < 3 * 3600000) return json({ ok: true, already: true });
+      await asks.setJSON(k, { at: new Date().toISOString() });
+      const r = await cfg.get('remind', { type: 'json' });
+      let sent = 0;
+      if (r && r.subs && r.subs.length) {
+        const v = await vapid();
+        for (const sub of r.subs) {
+          try { await webpush.sendNotification(sub, JSON.stringify({ title: 'Weekly Staff Pay', body: (d.name || 'An employee') + ' says their hours are missing.', tag: 'ask-' + k }), { TTL: 86400, urgency: 'high', vapidDetails: { subject: url.origin, publicKey: v.publicKey, privateKey: v.privateKey } }); sent++; } catch (e) { /* shown in the manager app either way */ }
+        }
+      }
+      return json({ ok: true, sent });
     }
 
     if (path === 'seen' && req.method === 'POST') {

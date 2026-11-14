@@ -127,7 +127,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
       if (r.status === 401) return r.json().then(function (j) { return { kind: j.error === 'setpin' ? 'setpin' : 'wrongpin' }; }, function () { return { kind: 'wrongpin' }; });
       if (!r.ok) return { kind: 'error' };
       return r.json().then(function (d) {
-        return { kind: 'ok', data: { name: d.name || '', shifts: (d.shifts || []).filter(Boolean), off: (d.off || []).filter(Boolean), upd: d.upd || '', chg: d.chg || '' } };
+        return { kind: 'ok', data: { name: d.name || '', shifts: (d.shifts || []).filter(Boolean), off: (d.off || []).filter(Boolean), upd: d.upd || '', chg: d.chg || '', leave: !!d.leave } };
       });
     });
   }
@@ -236,7 +236,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
   }
   function showHTML() {
     var d = saved.data, today = todayISO(), wk = ui.wk, minWk = mondayOf(addDays(today, -14)), maxWk = addDays(mondayOf(today), 56), nx = nextShift(d);
-    var h = '<section class="card"><p class="hi">Hi ' + esc(d.name) + '</p>' + (nx ?
+    var h = '<section class="card"><p class="hi">Hi ' + esc(d.name) + '</p>' + (d.leave ? '<p class="hint" style="margin-bottom:8px"><strong>You are marked as on leave.</strong> Tell your manager when you are back.</p>' : '') + (nx ?
       '<div class="next"><b>' + (nx.live ? 'Working now' : 'Next shift') + '</b><span class="big">' + esc(times(nx.s)) + '</span><span class="when">' + esc(fDay.format(nx.st) + ' ' + fShort.format(nx.st)) + '</span></div>' :
       '<p class="hint">No upcoming shifts recorded yet.</p>') + '</section>';
     h += '<section class="card"><div class="weeknav"><button class="icon" data-act="prev" aria-label="Previous week"' + (wk <= minWk ? ' disabled' : '') + '>' + ICON.left + '</button>' +
@@ -249,7 +249,8 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
         (d.off.indexOf(ds) > -1 ? '<span class="off">Day off</span>' : '<span class="none">Not scheduled</span>');
       h += '<li class="day' + (ds === today ? ' today' : '') + '"><div class="d"><b>' + fDay.format(dt) + '</b><span>' + fShort.format(dt) + '</span></div><div class="t">' + body + '</div></li>';
     }
-    h += '</ul></section><div class="row"><button class="btn" data-act="this">This week</button><button class="btn" data-act="refresh">Refresh</button></div>' + pushHTML();
+    h += '</ul></section><div class="row"><button class="btn" data-act="this">This week</button><button class="btn" data-act="refresh">Refresh</button></div>' + pushHTML() +
+      '<section class="card"><p style="margin-bottom:10px">Worked a day that is not shown here?</p><button class="btn" data-act="ask">Tell my manager my hours are missing</button><p class="msg' + (ui.askErr ? ' err' : '') + '" role="status">' + esc(ui.askMsg || '') + '</p></section>';
     var upd = d.upd ? new Date(d.upd) : null;
     h += '<p class="hint">' + (ui.online ? '' : 'You are offline. Showing the last times saved on this phone. ') +
       (upd && !isNaN(upd.getTime()) ? 'Updated by your manager ' + esc(fWhen.format(upd)) + '. ' : '') +
@@ -301,6 +302,15 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     else if (a === 'this') { ui.wk = mondayOf(todayISO()); render(); }
     else if (a === 'refresh') refresh(true);
     else if (a === 'push-on') pushOn();
+    else if (a === 'ask') {
+      ui.askMsg = 'Sending…'; ui.askErr = false; render();
+      post('ask', { phone: saved.phone }, auth()).then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok) throw new Error('x');
+          ui.askErr = false; ui.askMsg = j.already ? 'Your manager was already told a short while ago.' : 'Your manager has been told.'; render();
+        });
+      }).catch(function () { ui.askErr = true; ui.askMsg = 'Could not send. Try again in a moment.'; render(); });
+    }
     else if (a === 'switch' || a === 'back') { forget(); ui.phase = 'enter'; ui.step = 'phone'; ui.draft = ''; ui.err = false; ui.msg = ''; render(); }
   });
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && saved) { markSeen(); refresh(false); } });
