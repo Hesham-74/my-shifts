@@ -467,6 +467,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   function codeRow(s, id) {
     return '<label class="field"><span>Phone number (their login to the staff app)</span><input type="tel" inputmode="tel" autocomplete="off" data-f="st-phone" placeholder="085 123 4567" value="' + esc(s.phone || '') + '"></label>' +
       '<div class="coderow"><p class="hint seen' + (/not seen yet/.test(seenLine(s)) ? ' wait' : /^Seen/.test(seenLine(s)) ? ' ok' : '') + '" data-seen role="status">' + esc(seenLine(s)) + '</p><div class="cbtns"><button class="btn" data-act="code-send">Send app link to ' + esc(s.name) + '</button>' +
+      '<button class="btn" data-act="code-nudge">Remind to check times</button>' +
       '<button class="btn' + (ui.pinReset === id ? ' danger' : '') + '" data-act="code-reset">' + (ui.pinReset === id ? 'Tap again: they must make a new code' : 'Reset their code') + '</button></div></div>';
   }
   function publishHTML() {
@@ -477,6 +478,8 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
         '<p id="fb-status" class="msg' + (f.err ? ' err' : '') + '" role="status">' + esc(netStatusLine()) + '</p>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Send now</button>' +
         '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
+        '<button class="btn" data-act="fb-nudge">Remind all staff to check their times</button>' +
+        remindHTML() +
         '<button class="btn" data-act="fb-off">Turn off on this phone</button>' +
         '<p class="hint">A few seconds after every change, each employee’s days and times are published to the staff app, and a full private backup of your records is saved online. Staff log in with their phone number and never see pay, rate, bank or cash.</p>';
     } else {
@@ -488,6 +491,55 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     }
     return h + '</div></section>';
   }
+  /* ---------- daily "record the hours" reminder for the manager ---------- */
+  var mPushOK = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  function b64ToBytes(b64) {
+    var pad = '='.repeat((4 - b64.length % 4) % 4), raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/')), out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  function remindHTML() {
+    var r = netCfg().remind || {}, hour = r.hour == null ? 0 : r.hour, opts = '';
+    for (var i = 0; i < 24; i++) opts += '<option value="' + i + '"' + (i === hour ? ' selected' : '') + '>' + pad(i) + ':00</option>';
+    var h = '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>Daily reminder to record hours</strong>';
+    if (!mPushOK) return h + '<p class="hint">Add this app to your Home Screen and open it from there to turn the reminder on.</p></div>';
+    h += '<label class="field"><span>Remind me every day at</span><select id="fb-hour" data-f="fb-hour">' + opts + '</select></label>';
+    h += r.on ? '<p class="hint seen ok">On: every day at ' + pad(hour) + ':00.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" style="flex:1 1 120px" data-act="fb-remind-on">Save new time</button><button class="btn" style="flex:1 1 120px" data-act="fb-remind-off">Turn reminder off</button></div>'
+      : '<button class="btn primary" data-act="fb-remind-on">Turn on daily reminder</button>';
+    return h + '<p class="msg' + (ui.remErr ? ' err' : '') + '" role="status">' + esc(ui.remMsg || '') + '</p></div>';
+  }
+  function remindOn() {
+    var hour = parseInt((document.getElementById('fb-hour') || {}).value, 10) || 0, tz = 'UTC';
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) {}
+    ui.remMsg = 'Turning on…'; ui.remErr = false; render();
+    Notification.requestPermission().then(function (perm) {
+      if (perm !== 'granted') throw new Error('denied');
+      return Promise.all([navigator.serviceWorker.ready, fetch(API + 'push-key', { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('key'); return r.json(); })]);
+    }).then(function (a) {
+      return a[0].pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(a[1].key) });
+    }).then(function (sub) {
+      return netApi('POST', 'admin-remind', { sub: sub.toJSON(), hour: hour, tz: tz });
+    }).then(function (res) {
+      netSet({ remind: { on: true, hour: res.hour } }); ui.remMsg = 'A test notification was sent to this phone.'; ui.remErr = false; render();
+    }).catch(function (e) {
+      ui.remErr = true;
+      ui.remMsg = e && e.message === 'denied' ? 'Notifications are blocked for this app. Allow them in your phone settings, then try again.' : 'Could not turn the reminder on. Try again in a moment.';
+      render();
+    });
+  }
+  function remindOff() {
+    var done = function () { netSet({ remind: { on: false, hour: (netCfg().remind || {}).hour || 0 } }); ui.remMsg = 'Reminder is off.'; ui.remErr = false; render(); };
+    navigator.serviceWorker.ready.then(function (reg) { return reg.pushManager.getSubscription(); }).then(function (sub) {
+      return netApi('POST', 'admin-remind', { off: true, sub: sub ? sub.toJSON() : null }).then(function () { if (sub) sub.unsubscribe(); });
+    }).then(done, done);
+  }
+  function nudge(phone, name) {
+    netApi('POST', 'nudge', phone ? { phone: phone } : {}).then(function (res) {
+      if (phone) toast(res.sent ? 'Reminder sent to ' + name + '.' : name + ' has not turned notifications on yet.');
+      else toast('Reminder sent to ' + res.sent + (res.sent === 1 ? ' person' : ' people') + (res.off ? '. ' + res.off + ' have notifications off.' : '.'));
+    }, function (e) { toast(netWhy(e)); });
+  }
+
   function fbAct(act, b) {
     if (act === 'code-send') {
       var sid = cardSid(b), s = state.staff[sid]; if (!s) return;
@@ -505,6 +557,14 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
         netRun.status = netRun.status || {}; Object.keys(res.status || {}).forEach(function (k) { netRun.status[k] = res.status[k]; });
         render(); toast(s3.name + ' can now make a new code in the staff app.');
       }, function (e) { render(); toast(netWhy(e)); });
+    } else if (act === 'code-nudge') {
+      var sid4 = cardSid(b), s4 = state.staff[sid4]; if (!s4) return;
+      if (!fbOn()) { toast('Turn the staff app on first (bottom of this page).'); return; }
+      if (phoneKey(s4.phone).length < 7) { toast('Enter ' + s4.name + '’s phone number first.'); return; }
+      nudge(s4.phone, s4.name);
+    } else if (act === 'fb-nudge') { nudge('', '');
+    } else if (act === 'fb-remind-on') { remindOn();
+    } else if (act === 'fb-remind-off') { remindOff();
     } else if (act === 'fb-publish') {
       var el = document.getElementById('fb-status'); if (el) { el.textContent = 'Sending…'; el.className = 'msg'; }
       runSync(true);
@@ -535,6 +595,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   }
   function fbInput(f, t) {
     if (f === 'fb-pw') { ui.netPw = t.value; return true; }
+    if (f === 'fb-hour') return true;
     if (f === 'st-phone') {
       var sid = cardSid(t); if (!state.staff[sid]) return true;
       state.staff[sid].phone = t.value.trim(); queueSave('staff', sid, 500); return true;

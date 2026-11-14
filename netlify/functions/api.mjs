@@ -2,6 +2,8 @@
 //   POST /api/enter                employee: is this phone on the list, and does it have a code yet?
 //   POST /api/setpin               employee: create their own code (only when none is set)
 //   GET  /api/schedule?phone=...   employee (phone + their code): days and times (never pay)
+//   POST /api/nudge                manager: ask one employee, or everyone, to check their times
+//   POST /api/admin-remind         manager: turn the daily "record the hours" reminder on or off for this phone
 //   POST /api/resetpin             manager: clear one employee's code so they can make a new one
 //   POST /api/login                manager: first call sets the password, later calls check it
 //   PUT  /api/sync                 manager: replace all schedules + save a full private backup
@@ -65,11 +67,11 @@ export default async (req) => {
     if (!v) { v = webpush.generateVAPIDKeys(); await cfg.setJSON('vapid', v); }
     return v;
   };
-  const notify = async (k) => {
+  const notify = async (k, text) => {
     const list = (await subs.get(k, { type: 'json' })) || [];
     if (!list.length) return 0;
     const v = await vapid();
-    const payload = JSON.stringify({ title: 'My Shifts', body: 'Your work times changed. Tap to see them.' });
+    const payload = JSON.stringify({ title: 'My Shifts', body: text || 'Your work times changed. Tap to see them.' });
     const keep = []; let sent = 0;
     for (const sub of list) {
       try {
@@ -125,6 +127,39 @@ export default async (req) => {
       const salt = randomBytes(16).toString('hex');
       await pins.setJSON(k, { salt, hash: hashOf(t, salt), fails: 0 });
       return json({ ok: true });
+    }
+
+    if (path === 'nudge' && req.method === 'POST') {
+      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const body = JSON.parse((await req.text()).slice(0, 300));
+      let keys;
+      if (body.phone) keys = [phoneKey(body.phone)]; else keys = (await sch.list()).blobs.map((b) => b.key);
+      let sent = 0, off = 0;
+      for (const k of keys) { const n = await notify(k, 'Your manager asks you to check your work times.'); if (n) sent++; else off++; }
+      return json({ ok: true, sent, off });
+    }
+
+    if (path === 'admin-remind' && req.method === 'POST') {
+      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const body = JSON.parse((await req.text()).slice(0, 5000));
+      const cur = (await cfg.get('remind', { type: 'json' })) || { subs: [] };
+      const sub = body.sub;
+      if (body.off) {
+        cur.subs = (cur.subs || []).filter((x) => !sub || x.endpoint !== sub.endpoint);
+        if (!sub) cur.subs = [];
+        await cfg.setJSON('remind', cur);
+        return json({ ok: true, on: false });
+      }
+      if (!sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) return json({ error: 'bad' }, 400);
+      const hour = Math.min(23, Math.max(0, parseInt(body.hour, 10) || 0));
+      let tz = 'UTC'; try { new Intl.DateTimeFormat('en-GB', { timeZone: String(body.tz) }); tz = String(body.tz); } catch (e) { tz = 'UTC'; }
+      const clean = { endpoint: sub.endpoint, keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } };
+      cur.subs = (cur.subs || []).filter((x) => x.endpoint !== clean.endpoint).concat([clean]).slice(-5);
+      cur.hour = hour; cur.tz = tz;
+      await cfg.setJSON('remind', cur);
+      const v = await vapid();
+      try { await webpush.sendNotification(clean, JSON.stringify({ title: 'Weekly Staff Pay', body: 'Daily reminder is on. You will be reminded at ' + String(hour).padStart(2, '0') + ':00.', tag: 'hours' }), { TTL: 3600, vapidDetails: { subject: url.origin, publicKey: v.publicKey, privateKey: v.privateKey } }); } catch (e) { /* the saved reminder still stands */ }
+      return json({ ok: true, on: true, hour, tz });
     }
 
     if (path === 'resetpin' && req.method === 'POST') {

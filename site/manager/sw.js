@@ -1,5 +1,5 @@
 /* Offline cache for Weekly Staff Pay. Bump CACHE when the app files change. */
-const CACHE = 'staff-pay-v8';
+const CACHE = 'staff-pay-v9';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -39,4 +39,20 @@ self.addEventListener('fetch', (e) => {
       return hit || net;
     })
   );
+});
+
+/* Notifications for the manager: the daily reminder to record hours. */
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Weekly Staff Pay', {
+    body: d.body || 'Time to record today’s hours.', tag: d.tag || 'hours', renotify: true, icon: 'icon-192.png', badge: 'icon-192.png'
+  }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    for (const c of list) { if (c.url.indexOf('/manager') > -1 && 'focus' in c) return c.focus(); }
+    return self.clients.openWindow('./');
+  }));
 });
