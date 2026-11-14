@@ -231,6 +231,8 @@ input:disabled { opacity: .5; }
 .nudge { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; background: var(--accent-soft); border-color: transparent; }
 .nudge p { margin-top: 2px; }
 input[type="file"] { font-size: 14px; width: 100%; min-width: 0; }
+input[type="time"], input[type="date"] { -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; }
+input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-date-and-time-value { text-align: center; }
 .staffrow .fields .coderow { grid-column: 1 / -1; display: grid; gap: 8px; background: var(--surface-2); border-radius: 8px; padding: 10px; }
 .coderow .cl { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); }
 .coderow .cv { font-size: 17px; letter-spacing: .04em; word-break: break-all; }
@@ -1200,6 +1202,8 @@ input[type="file"] { font-size: 14px; width: 100%; min-width: 0; }
   function markBackup() { setSetting('lastBackup', Date.now()); }
   function nudgeHTML() {
     if (!hasData()) return '';
+    if (fbOn()) return netCfg().err ? '<section class="card nudge"><div><strong>Online backup has a problem</strong><p class="hint">' + esc(netCfg().err) + '</p></div><button class="btn primary" data-act="tab" data-tab="staff">Open</button></section>' : '';
+    return '<section class="card nudge"><div><strong>Automatic backup is off</strong><p class="hint">Turn it on once at the bottom of the Staff tab. Your records are then saved online after every change.</p></div><button class="btn primary" data-act="tab" data-tab="staff">Turn on</button></section>';
     var a = backupAge();
     if (a !== null && a < 7) return '';
     return '<section class="card nudge"><div><strong>' + (a === null ? 'No backup yet' : 'Last backup was ' + a + ' days ago') + '</strong>' +
