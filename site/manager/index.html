@@ -85,7 +85,7 @@ main { padding-block: 16px 96px; display: grid; gap: 16px; align-content: start;
 button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .field { display: grid; gap: 4px; min-width: 0; }
 .field > span { font-size: 12px; font-weight: 600; color: var(--ink-2); }
-input[type="text"], input[type="number"], input[type="date"], input[type="time"], input[type="email"], input[type="password"], select {
+input[type="text"], input[type="number"], input[type="date"], input[type="time"], input[type="email"], input[type="password"], input[type="tel"], select {
   width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 16px; min-height: 40px;
 }
 input.num { text-align: right; }
@@ -365,185 +365,145 @@ input[type="file"] { font-size: 14px; width: 100%; min-width: 0; }
     shifts.sort(function (a, b) { return a.d.localeCompare(b.d) || a.i.localeCompare(b.i); }); off.sort();
     return { name: state.staff[sid].name, shifts: shifts, off: off };
   }
-  /* ---------- publish schedules to the staff app (Firebase Firestore over REST) ---------- */
-  var PID_OK = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
-  var fbTok = { id: '', exp: 0 }, fbRun = { timer: null, running: false, again: false, force: false };
-  function fbCfg() { return getSettings().fb || {}; }
-  function fbSet(patch) { var f = fbCfg(); Object.keys(patch).forEach(function (k) { f[k] = patch[k]; }); setSetting('fb', f); return f; }
-  function fbOn() { var f = fbCfg(); return !!(f.pid && f.key && f.refresh); }
-  function fbCodeText(code) { var f = fbCfg(); return (f.pid ? f.pid + '.' : '') + code; }
-  function fbErr(code, msg) { var e = new Error(msg); e.code = code; return e; }
-
-  function fbFetch(url, opts) {
-    return fetch(url, opts).then(function (r) {
+  /* ---------- online: publish schedules to the staff app + automatic backup (same site, /api/) ---------- */
+  var API = '/api/';
+  var netRun = { timer: null, running: false, again: false, lastSig: '' };
+  function netCfg() { return getSettings().net || {}; }
+  function netSet(patch) { var f = netCfg(); Object.keys(patch).forEach(function (k) { f[k] = patch[k]; }); setSetting('net', f); return f; }
+  function fbOn() { return !!netCfg().token; }
+  function phoneKey(p) { var d = String(p == null ? '' : p).replace(/\D/g, ''); return d.length >= 9 ? d.slice(-9) : d; }
+  function sha256hex(str) {
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)).then(function (buf) {
+      return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+    });
+  }
+  function netApi(method, path, body, token) {
+    var opts = { method: method, headers: { 'Authorization': 'Bearer ' + (token || netCfg().token || '') }, cache: 'no-store' };
+    if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    return fetch(API + path, opts).then(function (r) {
       return r.text().then(function (t) {
-        var j = null; try { j = t ? JSON.parse(t) : {}; } catch (e) { j = {}; }
+        var j = {}; try { j = t ? JSON.parse(t) : {}; } catch (e) { j = {}; }
         if (r.ok) return j;
-        var m = (j && j.error && (j.error.message || j.error.status)) || '';
-        var kind = r.status === 401 ? 'auth' : r.status === 403 ? 'rules' : r.status === 404 ? 'nodb' : r.status === 400 ? 'bad' : 'http';
-        var e = fbErr(kind, m); e.status = r.status; throw e;
+        var e2 = new Error(j.error || ('http ' + r.status)); e2.status = r.status; throw e2;
       });
-    }, function () { throw fbErr('net', 'No internet connection.'); });
+    }, function () { var e = new Error('net'); e.status = 0; throw e; });
   }
-  function fbSignIn(key, email, pw) {
-    return fbFetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(key), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email, password: pw, returnSecureToken: true })
-    }).then(function (j) {
-      fbTok = { id: j.idToken, exp: Date.now() + (Number(j.expiresIn) || 3600) * 1000 };
-      return j.refreshToken;
-    });
+  function netWhy(e) {
+    if (e.status === 0) return 'No internet connection. It will retry next time you open the app.';
+    if (e.status === 401) return 'The password is no longer accepted. Turn it on again with your password.';
+    if (e.status === 404) return 'The online service was not found. Open this app from its website link.';
+    return 'Could not reach the online service (' + (e.message || 'error') + ').';
   }
-  function fbToken() {
-    if (fbTok.id && Date.now() < fbTok.exp - 60000) return Promise.resolve(fbTok.id);
-    var f = fbCfg(); if (!f.refresh || !f.key) return Promise.reject(fbErr('auth', 'Sign in again.'));
-    return fbFetch('https://securetoken.googleapis.com/v1/token?key=' + encodeURIComponent(f.key), {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(f.refresh)
-    }).then(function (j) {
-      fbTok = { id: j.id_token, exp: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
-      if (j.refresh_token && j.refresh_token !== f.refresh) fbSet({ refresh: j.refresh_token });
-      return fbTok.id;
-    }, function (e) { if (e.code === 'bad' || e.code === 'auth') { fbSet({ refresh: '' }); e.code = 'auth'; } throw e; });
-  }
-  function fbDocUrl(code) { return 'https://firestore.googleapis.com/v1/projects/' + encodeURIComponent(fbCfg().pid) + '/databases/(default)/documents/schedule/' + encodeURIComponent(code); }
-  function fbEnc(sch) {
-    return { fields: {
-      name: { stringValue: sch.name || '' },
-      upd: { stringValue: new Date().toISOString() },
-      shifts: { arrayValue: { values: sch.shifts.map(function (x) { return { mapValue: { fields: { d: { stringValue: x.d }, i: { stringValue: x.i }, o: { stringValue: x.o || '' } } } }; }) } },
-      off: { arrayValue: { values: sch.off.map(function (d) { return { stringValue: d }; }) } }
-    } };
-  }
-  function fbPut(code, sch) {
-    return fbToken().then(function (tok) {
-      return fbFetch(fbDocUrl(code), { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(fbEnc(sch)) });
-    });
-  }
-  function fbDel(code) {
-    return fbToken().then(function (tok) {
-      return fbFetch(fbDocUrl(code), { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + tok } });
-    });
-  }
-  function fbWhy(e) {
-    var m = String(e && e.message || '');
-    if (e.code === 'net') return 'No internet connection. It will retry next time.';
-    if (e.code === 'auth') return 'Sign-in expired. Enter your password and tap Connect again.';
-    if (e.code === 'rules') return 'Firebase refused the update. Check the Rules (step 5 of the setup).';
-    if (e.code === 'nodb') return 'Firebase could not find the database. Check the Project ID and that Firestore is created.';
-    return 'Could not publish' + (m ? ': ' + m : '.');
-  }
-  function fbStatusLine() {
-    var f = fbCfg();
-    if (!fbOn()) return f.err || '';
+  function netStatusLine() {
+    var f = netCfg();
     if (f.err) return f.err;
-    return f.last ? 'Published to your staff ' + new Date(f.last).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.' : 'Connected. Nothing published yet.';
+    if (!fbOn()) return '';
+    return f.last ? 'Published and backed up ' + new Date(f.last).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.' : 'On. Nothing sent yet.';
   }
-  function fbShowStatus(isErr) {
+  function fbShowStatus() {
     var el = document.getElementById('fb-status');
-    if (el) { el.textContent = fbStatusLine(); el.className = 'msg' + (isErr || fbCfg().err ? ' err' : ''); }
+    if (el) { el.textContent = netStatusLine(); el.className = 'msg' + (netCfg().err ? ' err' : ''); }
   }
-
+  function netPayload() {
+    var schedules = {};
+    Object.keys(state.staff).forEach(function (sid) { var k = phoneKey(state.staff[sid].phone); if (k.length >= 7 && !schedules[k]) schedules[k] = buildSchedule(sid); });
+    return { schedules: schedules, backup: hasData() ? { staff: state.staff, weeks: state.weeks } : null };
+  }
   function scheduleSync() {
     ensureCodesLocal();
     if (!fbOn()) return;
-    clearTimeout(fbRun.timer); fbRun.timer = setTimeout(function () { runSync(false); }, 2500);
+    clearTimeout(netRun.timer); netRun.timer = setTimeout(function () { runSync(false); }, 2500);
   }
-  /* Publish what changed; remove codes that no longer belong to anyone. */
   function runSync(force) {
     if (!fbOn()) return Promise.resolve();
-    if (fbRun.running) { fbRun.again = true; fbRun.force = fbRun.force || !!force; return Promise.resolve(); }
-    fbRun.running = true;
-    var known = fbCfg().pub || {}, nextPub = JSON.parse(JSON.stringify(known)), want = {}, ops = [];
-    Object.keys(state.staff).forEach(function (sid) { var c = state.staff[sid].code; if (c && !want[c]) want[c] = buildSchedule(sid); });
-    Object.keys(want).forEach(function (c) {
-      var str = canon(want[c]);
-      if (force || known[c] !== str) ops.push(function () { return fbPut(c, want[c]).then(function () { nextPub[c] = str; }); });
-    });
-    Object.keys(known).forEach(function (c) { if (!want[c]) ops.push(function () { return fbDel(c).then(function () { delete nextPub[c]; }, function (e) { if (e.status === 404) { delete nextPub[c]; } else throw e; }); }); });
-    var done = ops.reduce(function (p, f) { return p.then(f); }, Promise.resolve());
-    return done.then(function () {
-      var patch = { pub: nextPub, err: '' }; if (ops.length) patch.last = Date.now(); fbSet(patch);
+    if (netRun.running) { netRun.again = true; return Promise.resolve(); }
+    var payload = netPayload(), sig = canon(payload);
+    if (!force && sig === netRun.lastSig) return Promise.resolve();
+    netRun.running = true;
+    return netApi('PUT', 'sync', payload).then(function () {
+      netRun.lastSig = sig; netSet({ last: Date.now(), err: '' });
     }, function (e) {
-      fbSet({ pub: nextPub, err: fbWhy(e) });
+      if (e.status === 401) netSet({ token: '', err: netWhy(e) }); else netSet({ err: netWhy(e) });
     }).then(function () {
-      fbRun.running = false; fbShowStatus();
-      if (fbRun.again) { var f2 = fbRun.force; fbRun.again = false; fbRun.force = false; return runSync(f2); }
+      netRun.running = false; fbShowStatus();
+      if (netRun.again) { netRun.again = false; return runSync(false); }
+    });
+  }
+  function netRestore() {
+    return netApi('GET', 'backup').then(function (o) {
+      if (!o || o.app !== 'weekly-staff-pay' || typeof o.staff !== 'object' || typeof o.weeks !== 'object') throw new Error('bad backup');
+      Object.keys(pending).forEach(function (k) { clearTimeout(pending[k].timer); delete pending[k]; });
+      state.staff = o.staff || {}; state.weeks = o.weeks || {}; ensureCodesLocal(); localSave();
+      return o;
     });
   }
 
   /* ---------- staff tab pieces ---------- */
   function codeRow(s, id) {
-    var confirm = ui.codeNew === id;
-    return '<div class="coderow"><div><span class="cl">Code for ' + esc(s.name) + '</span><strong class="num cv">' + esc(fbCodeText(s.code || '')) + '</strong></div>' +
-      '<div class="cbtns"><button class="btn" data-act="code-send">Send code</button>' +
-      '<button class="btn' + (confirm ? ' danger' : '') + '" data-act="code-new">' + (confirm ? 'Tap again: old code stops' : 'New code') + '</button></div></div>';
+    return '<label class="field"><span>Phone number (their login to the staff app)</span><input type="tel" inputmode="tel" autocomplete="off" data-f="st-phone" placeholder="085 123 4567" value="' + esc(s.phone || '') + '"></label>' +
+      '<div class="coderow"><div class="cbtns"><button class="btn" data-act="code-send">Send app link to ' + esc(s.name) + '</button></div></div>';
   }
   function publishHTML() {
-    var f = fbCfg(), on = fbOn(), d = ui.fbDraft || {};
-    var h = '<section class="card"><h2 class="sec-title">Staff app</h2><div class="addform">';
+    var f = netCfg(), on = fbOn();
+    var h = '<section class="card"><h2 class="sec-title">Staff app and online backup</h2><div class="addform">';
     if (on) {
-      h += '<p><strong>Connected</strong> as ' + esc(f.email || '') + '<br><span class="hint">Project ' + esc(f.pid) + '</span></p>' +
-        '<label class="field"><span>Staff app link (where you put the staff app)</span><input type="text" inputmode="url" data-f="fb-url" placeholder="https://…" value="' + esc(f.url || '') + '"></label>' +
-        '<p id="fb-status" class="msg' + (f.err ? ' err' : '') + '" role="status">' + esc(fbStatusLine()) + '</p>' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1" data-act="fb-publish">Publish now</button><button class="btn" style="flex:1" data-act="fb-off">Disconnect</button></div>' +
-        '<p class="hint">Schedules publish by themselves a few seconds after you change anything. Staff see names, days and times only, never pay, rate, bank or cash.</p>';
+      h += '<p><strong>On.</strong> <span class="hint">Staff app: ' + esc(location.origin) + '/</span></p>' +
+        '<p id="fb-status" class="msg' + (f.err ? ' err' : '') + '" role="status">' + esc(netStatusLine()) + '</p>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Send now</button>' +
+        '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
+        '<button class="btn" data-act="fb-off">Turn off on this phone</button>' +
+        '<p class="hint">A few seconds after every change, each employee’s days and times are published to the staff app, and a full private backup of your records is saved online. Staff log in with their phone number and never see pay, rate, bank or cash.</p>';
     } else {
-      h += '<p class="hint">Employees install a separate app, type their code and see only their own times. Connect your free Firebase project once, then every schedule you save is published automatically.</p>' +
-        '<label class="field"><span>Firebase Project ID</span><input type="text" data-f="fb-pid" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="my-restaurant-1a2b3" value="' + esc(f.pid || '') + '"></label>' +
-        '<label class="field"><span>Web API key</span><input type="text" data-f="fb-key" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="AIza…" value="' + esc(f.key || '') + '"></label>' +
-        '<label class="field"><span>Your Firebase login email</span><input type="email" data-f="fb-email" inputmode="email" autocapitalize="off" value="' + esc(f.email || '') + '"></label>' +
-        '<label class="field"><span>Your Firebase login password</span><input type="password" id="fb-pw" data-f="fb-pw" autocomplete="current-password" value="' + esc(d.pw || '') + '"></label>' +
-        '<label class="field"><span>Staff app link (optional, used in the message you send)</span><input type="text" inputmode="url" data-f="fb-url" placeholder="https://…" value="' + esc(f.url || '') + '"></label>' +
-        '<button class="btn primary" data-act="fb-connect"' + (ui.fbBusy ? ' disabled' : '') + '>' + (ui.fbBusy ? 'Connecting…' : 'Connect') + '</button>' +
+      h += '<p class="hint">Turn this on once. Employees then open the staff app, type their phone number and see only their own times. Your records are also backed up online after every change, protected by this password.</p>' +
+        '<label class="field"><span>Manager password (8 characters or more)</span><input type="password" id="fb-pw" data-f="fb-pw" autocomplete="current-password" value="' + esc(ui.netPw || '') + '"></label>' +
+        '<button class="btn primary" data-act="fb-connect"' + (ui.fbBusy ? ' disabled' : '') + '>' + (ui.fbBusy ? 'Connecting…' : 'Turn on') + '</button>' +
         '<p id="fb-status" class="msg' + (ui.fbErr || f.err ? ' err' : '') + '" role="status">' + esc(ui.fbMsg || f.err || '') + '</p>' +
-        '<p class="hint">The password is used once to sign in and is not stored on this phone.</p>';
+        '<p class="hint">The first time, this sets your password. Keep it safe: you need it to get your records back on a new phone.</p>';
     }
     return h + '</div></section>';
-  }
-  function shareText(sid) {
-    var s = state.staff[sid], f = fbCfg();
-    return 'Hi ' + s.name + ',\n' + (f.url ? 'Install the My Shifts app: ' + f.url + '\n(iPhone: Share, then Add to Home Screen. Android: menu, then Install app.)\n' : '') +
-      'Open it and enter this code once:\n' + fbCodeText(s.code);
   }
   function fbAct(act, b) {
     if (act === 'code-send') {
       var sid = cardSid(b), s = state.staff[sid]; if (!s) return;
-      if (!fbCfg().pid) { toast('Connect the staff app first (bottom of this page).'); return; }
-      var text = shareText(sid);
+      if (phoneKey(s.phone).length < 7) { toast('Enter ' + s.name + '’s phone number first.'); return; }
+      var text = 'Hi ' + s.name + ',\nSee your work times here: ' + location.origin + '/\n(iPhone: Share, then Add to Home Screen. Android: menu, then Install app.)\nOpen it and enter your phone number: ' + s.phone;
       if (navigator.share) { navigator.share({ text: text }).catch(function () {}); return; }
       try { navigator.clipboard.writeText(text).then(function () { toast('Message copied. Paste it into WhatsApp.'); }, function () { toast(text); }); } catch (e) { toast(text); }
-    } else if (act === 'code-new') {
-      var sid2 = cardSid(b); if (!state.staff[sid2]) return;
-      if (ui.codeNew !== sid2) { ui.codeNew = sid2; render(); return; }
-      ui.codeNew = null; state.staff[sid2].code = genCode(); queueSave('staff', sid2, 0); render(); toast('New code made. Send it to ' + state.staff[sid2].name + '.');
     } else if (act === 'fb-publish') {
-      var el = document.getElementById('fb-status'); if (el) { el.textContent = 'Publishing…'; el.className = 'msg'; }
-      runSync(true).then(function () { fbShowStatus(); });
+      var el = document.getElementById('fb-status'); if (el) { el.textContent = 'Sending…'; el.className = 'msg'; }
+      runSync(true);
     } else if (act === 'fb-off') {
-      fbTok = { id: '', exp: 0 }; fbSet({ refresh: '', err: '' }); ui.fbMsg = ''; ui.fbErr = false; render();
+      netSet({ token: '', err: '' }); ui.fbMsg = ''; ui.fbErr = false; ui.netRestoreAsk = false; render();
+    } else if (act === 'fb-restore') {
+      if (!ui.netRestoreAsk) { ui.netRestoreAsk = true; render(); return; }
+      ui.netRestoreAsk = false;
+      netRestore().then(function () { netRun.lastSig = ''; render(); toast('Restored from the online backup.'); }, function (e) { render(); toast(e.status === 404 ? 'There is no online backup yet.' : netWhy(e)); });
     } else if (act === 'fb-connect') {
-      var f = fbCfg(), d = ui.fbDraft || {}, pw = (document.getElementById('fb-pw') || {}).value || d.pw || '';
-      var pid = (f.pid || '').trim().toLowerCase(), key = (f.key || '').trim(), email = (f.email || '').trim();
-      var bad = !PID_OK.test(pid) ? 'The Project ID looks wrong. It is lowercase letters, numbers and dashes.' : !key ? 'Enter the Web API key.' : !/^\S+@\S+\.\S+$/.test(email) ? 'Enter the email of your Firebase login.' : !pw ? 'Enter your password.' : '';
-      if (bad) { ui.fbMsg = bad; ui.fbErr = true; render(); return; }
-      fbSet({ pid: pid, key: key, email: email });
+      var pw = (document.getElementById('fb-pw') || {}).value || ui.netPw || '';
+      if (pw.length < 8) { ui.fbMsg = 'Use a password of 8 characters or more.'; ui.fbErr = true; render(); return; }
       ui.fbBusy = true; ui.fbMsg = ''; ui.fbErr = false; render();
-      fbSignIn(key, email, pw).then(function (rt) {
-        fbSet({ refresh: rt, pub: {}, err: '' }); ui.fbDraft = {}; ui.fbBusy = false; ui.fbMsg = ''; render();
-        var el2 = document.getElementById('fb-status'); if (el2) el2.textContent = 'Publishing…';
-        return runSync(true).then(function () { fbShowStatus(); });
+      var tok = '';
+      sha256hex('staffpay:' + pw).then(function (t) { tok = t; return netApi('POST', 'login', {}, t); }).then(function (res) {
+        netSet({ token: tok, err: '', last: 0 }); ui.netPw = ''; ui.fbBusy = false;
+        if (!hasData() && res.hasBackup) {
+          return netRestore().then(function () { render(); toast('Your records were restored from the online backup.'); }, function () { render(); });
+        }
+        render();
+        return runSync(true);
       }, function (e) {
         ui.fbBusy = false; ui.fbErr = true;
-        ui.fbMsg = e.code === 'net' ? 'No internet connection.' : /API_KEY/i.test(e.message) ? 'The Web API key is not right.' : /EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_LOGIN|USER_DISABLED/i.test(e.message) ? 'Wrong email or password. Use the user you created in Firebase (step 4).' : /OPERATION_NOT_ALLOWED|CONFIGURATION/i.test(e.message) ? 'Email/Password sign-in is not turned on in Firebase (step 4).' : 'Could not sign in' + (e.message ? ': ' + e.message : '.');
+        ui.fbMsg = e.status === 401 ? 'Wrong password.' : netWhy(e);
         render();
       });
     }
   }
   function fbInput(f, t) {
-    if (f === 'fb-pw') { ui.fbDraft = ui.fbDraft || {}; ui.fbDraft.pw = t.value; return true; }
-    var map = { 'fb-pid': 'pid', 'fb-key': 'key', 'fb-email': 'email', 'fb-url': 'url' };
-    if (!map[f]) return false;
-    var v = t.value.trim(); if (f === 'fb-pid') v = v.toLowerCase();
-    var o = {}; o[map[f]] = v; fbSet(o); return true;
+    if (f === 'fb-pw') { ui.netPw = t.value; return true; }
+    if (f === 'st-phone') {
+      var sid = cardSid(t); if (!state.staff[sid]) return true;
+      state.staff[sid].phone = t.value.trim(); queueSave('staff', sid, 500); return true;
+    }
+    return false;
   }
 
   function svClose() { if (sv.unsub) { sv.unsub(); sv.unsub = null; } }

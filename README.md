@@ -1,3 +1,3 @@
 # My Shifts
 
-Staff schedule app (root) and the manager app (`/manager/`).
+Staff schedule app (`site/`), manager app (`site/manager/`) and a small Netlify function (`netlify/functions/api.mjs`) that stores schedules and backups.

@@ -84,8 +84,6 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
   'use strict';
   var app = document.getElementById('app'), statusEl = document.getElementById('status');
   var KEY = 'my-shifts-v1';
-  var CODE_RE = /^[A-Z2-9]{6}$/;
-  var PID_RE = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var pad = function (n) { return String(n).padStart(2, '0'); };
@@ -103,50 +101,20 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>'
   };
 
-  /* saved: { pid, code, data, fetched } */
+  /* saved: { phone, data, fetched } */
   var saved = null;
   var ui = { wk: mondayOf(todayISO()), phase: 'enter', msg: '', err: false, online: true, busy: false, draft: '' };
 
-  function load() { try { var o = JSON.parse(localStorage.getItem(KEY) || 'null'); if (o && o.pid && o.code) saved = o; } catch (e) {} }
+  function load() { try { var o = JSON.parse(localStorage.getItem(KEY) || 'null'); if (o && o.phone) saved = o; } catch (e) {} }
   function store() { try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {} }
   function forget() { saved = null; try { localStorage.removeItem(KEY); } catch (e) {} }
 
-  /* "my-project-1a2b.K7M2QX" -> {pid, code}. The project part may be left out once it is known. */
-  function parseEntry(txt) {
-    var t = String(txt || '').trim().replace(/\s+/g, '');
-    var i = t.lastIndexOf('.'), pid, code;
-    if (i > -1) { pid = t.slice(0, i).toLowerCase(); code = t.slice(i + 1).toUpperCase(); }
-    else { pid = saved ? saved.pid : ''; code = t.toUpperCase(); }
-    if (!CODE_RE.test(code)) return { error: 'The code has 6 letters and numbers, like K7M2QX. Check the message your manager sent you.' };
-    if (!PID_RE.test(pid)) return { error: 'The first part of the code is missing. Enter all of it, with the dot, exactly as your manager sent it.' };
-    return { pid: pid, code: code };
-  }
-
-  /* Firestore REST value -> plain value */
-  function dec(v) {
-    if (!v) return null;
-    if ('stringValue' in v) return v.stringValue;
-    if ('integerValue' in v) return Number(v.integerValue);
-    if ('doubleValue' in v) return v.doubleValue;
-    if ('booleanValue' in v) return v.booleanValue;
-    if ('nullValue' in v) return null;
-    if ('timestampValue' in v) return v.timestampValue;
-    if ('arrayValue' in v) return (v.arrayValue.values || []).map(dec);
-    if ('mapValue' in v) { var o = {}, f = v.mapValue.fields || {}; Object.keys(f).forEach(function (k) { o[k] = dec(f[k]); }); return o; }
-    return null;
-  }
-  function fetchDoc(pid, code) {
-    var url = 'https://firestore.googleapis.com/v1/projects/' + encodeURIComponent(pid) + '/databases/(default)/documents/schedule/' + encodeURIComponent(code);
-    return fetch(url, { cache: 'no-store' }).then(function (r) {
-      if (r.status === 404) { return r.json().catch(function () { return {}; }).then(function (j) {
-        var m = (j && j.error && j.error.message) || '';
-        return { kind: /database/i.test(m) && !/document/i.test(m) ? 'nodb' : 'notfound' };
-      }); }
-      if (r.status === 403 || r.status === 401) return { kind: 'denied' };
+  function phoneKey(p) { var d = String(p == null ? '' : p).replace(/\D/g, ''); return d.length >= 9 ? d.slice(-9) : d; }
+  function fetchDoc(phone) {
+    return fetch('/api/schedule?phone=' + encodeURIComponent(phoneKey(phone)), { cache: 'no-store' }).then(function (r) {
+      if (r.status === 404 || r.status === 400) return { kind: 'notfound' };
       if (!r.ok) return { kind: 'error' };
-      return r.json().then(function (j) {
-        var f = j.fields || {}, d = {};
-        Object.keys(f).forEach(function (k) { d[k] = dec(f[k]); });
+      return r.json().then(function (d) {
         return { kind: 'ok', data: { name: d.name || '', shifts: (d.shifts || []).filter(Boolean), off: (d.off || []).filter(Boolean), upd: d.upd || '' } };
       });
     });
@@ -155,16 +123,12 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
   function refresh(manual) {
     if (!saved || ui.busy) return;
     ui.busy = true; setStatus(manual ? 'Updating…' : '');
-    fetchDoc(saved.pid, saved.code).then(function (res) {
+    fetchDoc(saved.phone).then(function (res) {
       ui.busy = false; ui.online = true;
       if (res.kind === 'ok') { saved.data = res.data; saved.fetched = Date.now(); store(); ui.phase = 'show'; ui.msg = ''; }
       else if (res.kind === 'notfound') {
-        forget(); ui.phase = 'enter'; ui.err = true; ui.msg = 'That code was not found. Check it with your manager, or ask for a new one.';
-      } else if (res.kind === 'denied') {
-        ui.err = true; ui.msg = 'The server refused the request. Tell your manager.'; if (!saved.data) ui.phase = 'enter';
-      } else if (res.kind === 'nodb') {
-        ui.err = true; ui.msg = 'Your manager’s server is not set up yet.'; if (!saved.data) ui.phase = 'enter';
-      } else { ui.online = false; if (!saved.data) { ui.phase = 'enter'; ui.err = true; ui.msg = 'Could not load your times. Try again in a moment.'; } }
+        forget(); ui.phase = 'enter'; ui.err = true; ui.msg = 'That phone number is not on the staff list. Check with your manager that they saved your number.';
+            } else { ui.online = false; if (!saved.data) { ui.phase = 'enter'; ui.err = true; ui.msg = 'Could not load your times. Try again in a moment.'; } }
       render();
     }, function () {
       ui.busy = false; ui.online = false;
@@ -191,10 +155,10 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
 
   function enterHTML() {
     return '<form class="card" id="f" autocomplete="off"><h2 class="title">Your work times</h2>' +
-      '<label>Your code<input id="code" type="text" autocapitalize="characters" autocorrect="off" spellcheck="false" autocomplete="off" placeholder="project-name.K7M2QX" value="' + esc(ui.draft) + '"></label>' +
+      '<label>Your phone number<input id="code" type="tel" inputmode="tel" autocomplete="tel" placeholder="085 123 4567" value="' + esc(ui.draft) + '"></label>' +
       '<button class="btn primary" type="submit">Show my times</button>' +
       '<p class="msg' + (ui.err ? ' err' : '') + '" role="status">' + esc(ui.busy ? 'Looking for your times…' : ui.msg) + '</p>' +
-      '<p class="hint">Your manager sends you the code in a message. You only enter it once on this phone.</p></form>';
+      '<p class="hint">Enter the phone number your manager has for you. You only enter it once on this phone.</p></form>';
   }
   function showHTML() {
     var d = saved.data, today = todayISO(), wk = ui.wk, minWk = mondayOf(addDays(today, -14)), maxWk = addDays(mondayOf(today), 56), nx = nextShift(d);
@@ -216,7 +180,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     h += '<p class="hint">' + (ui.online ? '' : 'You are offline. Showing the last times saved on this phone. ') +
       (upd && !isNaN(upd.getTime()) ? 'Updated by your manager ' + esc(fWhen.format(upd)) + '. ' : '') +
       'Ask your manager if something looks wrong.</p>' +
-      '<button class="btn" data-act="switch" style="justify-self:start">Not you? Change code</button>';
+      '<button class="btn" data-act="switch" style="justify-self:start">Not you? Change number</button>';
     return h;
   }
   function render() {
@@ -229,9 +193,8 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     if (e.target.id !== 'f') return;
     e.preventDefault();
     var v = document.getElementById('code').value; ui.draft = v;
-    var p = parseEntry(v);
-    if (p.error) { ui.err = true; ui.msg = p.error; render(); return; }
-    saved = { pid: p.pid, code: p.code, data: null, fetched: 0 };
+    if (phoneKey(v).length < 7) { ui.err = true; ui.msg = 'Enter your full phone number.'; render(); return; }
+    saved = { phone: phoneKey(v), data: null, fetched: 0 };
     ui.err = false; ui.msg = ''; ui.phase = 'enter'; ui.busy = false;
     refresh(true); render();
   });
@@ -248,14 +211,8 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
   window.addEventListener('online', function () { if (saved) refresh(false); });
   setInterval(function () { if (document.visibilityState === 'visible' && saved) refresh(false); }, 300000);
 
-  /* start: link with #c=PROJECT.CODE, saved code, or the entry form */
+  /* start */
   load();
-  var m = /[#&]c=([^&]+)/.exec(location.hash || '');
-  if (m) {
-    var p0 = parseEntry(decodeURIComponent(m[1]));
-    if (!p0.error) { saved = { pid: p0.pid, code: p0.code, data: null, fetched: 0 }; store(); }
-    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
-  }
   if (saved) { ui.phase = saved.data ? 'show' : 'enter'; render(); ui.busy = false; refresh(false); }
   else render();
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) { navigator.serviceWorker.register('sw.js').catch(function () {}); }
