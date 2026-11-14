@@ -19,6 +19,40 @@ function localNow(tz) {
   return { date, hour: Number(get('hour')) % 24, dow: date.getUTCDay(), day: date.toISOString().slice(0, 10) };
 }
 
+const FROM_DOMAIN = process.env.MAIL_FROM_DOMAIN || 'mail.myshifts.info';
+const h = (x) => String(x === undefined || x === null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// The payslip as an email. The PPS number is shortened here; the full payslip is in the staff app.
+function slipEmail(sl, wid) {
+  const td = 'padding:6px 8px;border-bottom:1px solid #e3e8ef;font:14px Arial,Helvetica,sans-serif;color:#14213a';
+  const kv = (rows) => '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">' + rows.map((r) => '<tr><td style="' + td + ';color:#566580">' + h(r[0]) + '</td><td align="right" style="' + td + ';font-weight:bold">' + h(r[1]) + '</td></tr>').join('') + '</table>';
+  const head = (t) => '<p style="font:bold 12px Arial,Helvetica,sans-serif;letter-spacing:1px;text-transform:uppercase;color:#566580;margin:18px 0 6px">' + h(t) + '</p>';
+  const grid = (cols, rows) => '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr>' + cols.map((c) => '<td style="' + td + ';color:#566580;font-size:12px">' + h(c) + '</td>').join('') + '</tr>' + rows.map((r) => '<tr>' + r.map((c) => '<td style="' + td + '">' + h(c) + '</td>').join('') + '</tr>').join('') + '</table>';
+  const pps = String(sl.pps || ''), ppsShort = pps.length > 4 ? '•••• ' + pps.slice(-4) : pps;
+  const el = (sl.el || []).filter((r) => r && (r.d || r.v || r.h)), de = (sl.de || []).filter((r) => r && (r.d || r.v || r.tot));
+  return '<div style="max-width:560px;margin:0 auto;padding:16px">' +
+    '<p style="font:bold 18px Arial,Helvetica,sans-serif;color:#14213a;margin:0 0 4px">' + h(sl.company || 'Payslip') + '</p>' +
+    '<p style="font:14px Arial,Helvetica,sans-serif;color:#566580;margin:0 0 12px">Payslip for the week starting ' + h(wid) + '</p>' +
+    kv([['Name', sl.fullName], ['PPS No.', ppsShort], ['Number', sl.number], ['Dept', sl.dept], ['Freq.', sl.freq], ['Period', sl.period], ['Pay Date', sl.payDate]].filter((r) => String(r[1] || '') !== '')) +
+    head('Pay Elements') + grid(['Description', 'Tax', 'Hours', 'Value'], el.map((r) => [r.d, r.t, r.h, r.v])) +
+    head('Deductions') + grid(['Description', 'Tax', 'Value', 'Total'], de.map((r) => [r.d, r.t, r.v, r.tot])) +
+    head('Summary') + kv([['Gross Pay', sl.gross], ['Total Deds', sl.totalDeds], ['Non-Tax Adjs', sl.nonTaxAdjs], ['Rounding', sl.rounding], ['Nett Pay', sl.nett], ['Pay Method', sl.method]]) +
+    head('Cumulative Details') + kv([['Gross Pay', sl.cGross], ['Non-Tax Deds', sl.cNonTaxDeds], ['Taxable Pay', sl.cTaxable], ['Tax Credit T.D', sl.cTaxCredit], ['Cut-Off T.D', sl.cCutOff], ['Total Tax', sl.cTotalTax]]) +
+    head('Tax/PRSI') + kv([['Tax Code', sl.taxCode], ['Emer. Start Per.', sl.emerStart], ['Tax Credit T.P', sl.taxCreditTP], ['Pay Rel. Code', sl.payRel], ['Total Insur. Wk.', sl.insurWk], ['Emp’er PRSI Per.', sl.erPrsiPer], ['Emp’er PRSI TD.', sl.erPrsiTD]]) +
+    (sl.comments ? head('Comments') + '<p style="font:14px Arial,Helvetica,sans-serif;color:#14213a;margin:0">' + h(sl.comments) + '</p>' : '') +
+    (sl.notes ? head('Notes') + '<p style="font:14px Arial,Helvetica,sans-serif;color:#14213a;margin:0">' + h(sl.notes) + '</p>' : '') +
+    '<p style="font:12px Arial,Helvetica,sans-serif;color:#566580;margin:20px 0 0">Sent for ' + h(sl.company || 'your employer') + ' by My Shifts. The figures were entered by your employer. Questions about this payslip go to your employer.</p></div>';
+}
+async function mailSlip(to, sl, wid) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key || !/^\S+@\S+\.\S+$/.test(String(to || ''))) return false;
+  const name = String(sl.company || 'Payslips').replace(/[<>"\r\n]/g, '').slice(0, 60);
+  try {
+    const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: name + ' <payslips@' + FROM_DOMAIN + '>', to: [String(to).trim()], subject: 'Your payslip, week starting ' + wid, html: slipEmail(sl, wid) }) });
+    return r.ok;
+  } catch (e) { return false; }
+}
+
 // Payslips: the day before the chosen day the owner is told; on the day, every payslip marked ready is released to its employee.
 async function payslips(cfg, doc, v, subject) {
   const st = ((doc && doc.settings) || {}).main || {};
@@ -42,18 +76,26 @@ async function payslips(cfg, doc, v, subject) {
   }
   if (now.dow !== day) return 'slips not today';
   const subs = getStore({ name: 'subs', consistency: 'strong' });
-  let out = 0;
+  let out = 0, mailed = 0;
   for (const r of ready) {
     const stf = doc.staff[r.sid], k = phoneKey(stf.phone); if (k.length < 7) continue;
     const list = await listOf(k);
     const entry = { wid: r.wid, slip: { ...r.slip, fullName: (stf.pay && stf.pay.fullName) || stf.name, pps: (stf.pay && stf.pay.pps) || '', company: st.company || '' } };
     const at = list.findIndex((x) => x.wid === r.wid);
-    if (at > -1) { if (JSON.stringify(list[at].slip) !== JSON.stringify(entry.slip)) { list[at] = { ...entry, at: list[at].at }; await store.setJSON(k, list); } continue; }
-    list.push({ ...entry, at: new Date().toISOString() }); list.sort((a, b) => b.wid.localeCompare(a.wid));
+    const email = stf.pay && stf.pay.email;
+    if (at > -1) {
+      let changed = false;
+      if (JSON.stringify(list[at].slip) !== JSON.stringify(entry.slip)) { list[at] = { ...entry, at: list[at].at, mailed: list[at].mailed }; changed = true; }
+      if (!list[at].mailed && email && await mailSlip(email, entry.slip, r.wid)) { list[at].mailed = true; changed = true; mailed++; }
+      if (changed) await store.setJSON(k, list);
+      continue;
+    }
+    const sentMail = email ? await mailSlip(email, entry.slip, r.wid) : false; if (sentMail) mailed++;
+    list.push({ ...entry, at: new Date().toISOString(), mailed: sentMail }); list.sort((a, b) => b.wid.localeCompare(a.wid));
     await store.setJSON(k, list.slice(0, 80)); out++;
     await send(await subs.get(k, { type: 'json' }), { title: 'My Shifts', body: 'Your payslip is ready. Tap to see it.' }, v, subject);
   }
-  return 'slips out ' + out;
+  return 'slips out ' + out + ' mailed ' + mailed;
 }
 
 export default async () => {
