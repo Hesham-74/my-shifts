@@ -389,7 +389,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       return r.text().then(function (t) {
         var j = {}; try { j = t ? JSON.parse(t) : {}; } catch (e) { j = {}; }
         if (r.ok) return j;
-        var e2 = new Error(j.error || ('http ' + r.status)); e2.status = r.status; throw e2;
+        var e2 = new Error(j.error || ('http ' + r.status)); e2.status = r.status; e2.data = j; throw e2;
       });
     }, function () { var e = new Error('net'); e.status = 0; throw e; });
   }
@@ -412,25 +412,63 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   function netPayload() {
     var schedules = {};
     Object.keys(state.staff).forEach(function (sid) { var k = phoneKey(state.staff[sid].phone); if (k.length >= 7 && !schedules[k]) schedules[k] = buildSchedule(sid); });
-    return { schedules: schedules, today: todayISO(), backup: hasData() ? { staff: state.staff, weeks: state.weeks } : null };
+    return { schedules: schedules, today: todayISO(), baseRev: netCfg().rev || 0, backup: hasData() ? { staff: state.staff, weeks: state.weeks } : null };
   }
   function scheduleSync() {
     ensureCodesLocal();
     if (!fbOn()) return;
     clearTimeout(netRun.timer); netRun.timer = setTimeout(function () { runSync(false); }, 2500);
   }
-  function runSync(force) {
+  /* ---------- shared records: several phones (manager, supervisor) work on the same data ---------- */
+  var dirtySeq = 0;
+  function markDirty(kind, id) { var d = netCfg().dirty || {}; d[kind + '/' + id] = ++dirtySeq + ':' + Date.now(); netSet({ dirty: d }); }
+  function isSup() { return fbOn() && netCfg().role === 'supervisor'; }
+  /* Take the server's records, then put this phone's unsent changes back on top. */
+  function adopt(server) {
+    var next = { staff: server.staff || {}, weeks: server.weeks || {} }, d = netCfg().dirty || {};
+    Object.keys(d).forEach(function (k) {
+      var i = k.indexOf('/'), kind = k.slice(0, i), id = k.slice(i + 1);
+      if (kind !== 'staff' && kind !== 'weeks') return;
+      if (isSup() && kind === 'staff') return;
+      if (state[kind][id] !== undefined) next[kind][id] = state[kind][id]; else delete next[kind][id];
+    });
+    Object.keys(pending).forEach(function (k) { clearTimeout(pending[k].timer); delete pending[k]; });
+    state.staff = next.staff; state.weeks = next.weeks; ensureCodesLocal(); localSave();
+    netSet({ rev: server.rev || 0 });
+    /* Nothing unsent here: what this phone holds is what the server holds, so there is nothing to send back. */
+    if (Object.keys(d).length) netRun.lastSig = ''; else { var pl = netPayload(); netRun.lastSig = canon({ s: pl.schedules, b: pl.backup }); }
+    safeRender();
+  }
+  function safeRender() {
+    var a = document.activeElement;
+    if (a && app.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) { netRun.renderLater = true; return; }
+    netRun.renderLater = false; render();
+  }
+  document.addEventListener('focusout', function () { setTimeout(function () { if (netRun.renderLater) safeRender(); }, 50); });
+  function netPoll() {
+    if (!fbOn() || netRun.running) return Promise.resolve();
+    return netApi('GET', 'data?rev=' + (netCfg().rev || 0)).then(function (res) {
+      if (res.role && res.role !== netCfg().role) { netSet({ role: res.role }); safeRender(); }
+      if (!res.same && res.has) { adopt(res); if (Object.keys(netCfg().dirty || {}).length) scheduleSync(); }
+    }, function (e) { if (e.status === 401) { netSet({ token: '', err: netWhy(e) }); safeRender(); } });
+  }
+  function runSync(force, retried) {
     if (!fbOn()) return Promise.resolve();
     if (netRun.running) { netRun.again = true; return Promise.resolve(); }
     var payload = netPayload(), sig = canon({ s: payload.schedules, b: payload.backup });
     if (!force && sig === netRun.lastSig) return Promise.resolve();
     netRun.running = true;
+    var sent = JSON.parse(JSON.stringify(netCfg().dirty || {})), stale = null;
     return netApi('PUT', 'sync', payload).then(function (res) {
-      netRun.lastSig = sig; netSet({ last: Date.now(), err: '' }); if (res && res.status) { netRun.status = res.status; seenShow(); }
+      var d = netCfg().dirty || {}; Object.keys(sent).forEach(function (k) { if (d[k] === sent[k]) delete d[k]; });
+      netRun.lastSig = sig; netSet({ last: Date.now(), err: '', rev: res.rev || 0, dirty: d }); if (res && res.status) { netRun.status = res.status; seenShow(); }
     }, function (e) {
+      if (e.status === 409 && e.data && e.data.error === 'stale') { stale = e.data; return; }
+      if (e.status === 409 && e.data && e.data.error === 'nodata') { netSet({ err: 'The manager has not saved any records yet.' }); return; }
       if (e.status === 401) netSet({ token: '', err: netWhy(e) }); else netSet({ err: netWhy(e) });
     }).then(function () {
       netRun.running = false; fbShowStatus();
+      if (stale) { adopt(stale); if (!retried) return runSync(true, true); return; }
       if (netRun.again) { netRun.again = false; return runSync(false); }
     });
   }
@@ -463,6 +501,26 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     });
   }
 
+  var SUP_NO_F = ['rate', 'bank', 'cfg-lunch', 'st-name', 'st-position', 'st-rate', 'st-bank', 'st-phone', 'ns-name', 'ns-position', 'ns-rate', 'ns-bank', 'bk-file'];
+  var SUP_NO_ACT = ['rm-staff', 'rm-confirm', 'add-staff', 'code-reset', 'fb-restore', 'bk-restore-yes', 'sup-save', 'sup-remove'];
+  /* A supervisor sees everything but only records hours and days off. */
+  function applyRole() {
+    if (!isSup()) return;
+    SUP_NO_F.forEach(function (f) { Array.prototype.forEach.call(app.querySelectorAll('[data-f="' + f + '"]'), function (el) { el.disabled = true; }); });
+    SUP_NO_ACT.forEach(function (a) { Array.prototype.forEach.call(app.querySelectorAll('[data-act="' + a + '"]'), function (el) { el.hidden = true; }); });
+    var add = app.querySelector('#ns-name'); if (add && add.closest('section')) add.closest('section').hidden = true;
+  }
+  function supHTML() {
+    if (isSup()) return '';
+    var has = !!netCfg().hasSup;
+    return '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>Supervisor account</strong>' +
+      '<p class="hint">' + (has ? 'A supervisor password is set. ' : '') + 'The supervisor opens this same app, enters their own password and can record hours and days off. They see everything but cannot change rates, bank amounts, staff or restore backups.</p>' +
+      '<label class="field"><span>' + (has ? 'New supervisor password' : 'Supervisor password (8 characters or more)') + '</span><input type="password" id="sup-pw" data-f="sup-pw" autocomplete="new-password"></label>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="sup-save">' + (has ? 'Change password' : 'Create supervisor account') + '</button>' +
+      (has ? '<button class="btn danger" style="flex:1 1 140px" data-act="sup-remove">' + (ui.supAsk ? 'Tap again to remove' : 'Remove supervisor') + '</button>' : '') + '</div>' +
+      '<p class="msg' + (ui.supErr ? ' err' : '') + '" role="status">' + esc(ui.supMsg || '') + '</p></div>';
+  }
+
   /* ---------- staff tab pieces ---------- */
   function codeRow(s, id) {
     return '<label class="field"><span>Phone number (their login to the staff app)</span><input type="tel" inputmode="tel" autocomplete="off" data-f="st-phone" placeholder="085 123 4567" value="' + esc(s.phone || '') + '"></label>' +
@@ -474,20 +532,20 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     var f = netCfg(), on = fbOn();
     var h = '<section class="card"><h2 class="sec-title">Staff app and online backup</h2><div class="addform">';
     if (on) {
-      h += '<p><strong>On.</strong> <span class="hint">Staff app: ' + esc(location.origin) + '/</span></p>' +
+      h += '<p><strong>Signed in as ' + (isSup() ? 'Supervisor' : 'Manager') + '.</strong> <span class="hint">Staff app: ' + esc(location.origin) + '/</span></p>' +
         '<p id="fb-status" class="msg' + (f.err ? ' err' : '') + '" role="status">' + esc(netStatusLine()) + '</p>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Send now</button>' +
         '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
         '<button class="btn" data-act="fb-nudge">Remind all staff to check their times</button>' +
-        remindHTML() +
+        remindHTML() + supHTML() +
         '<button class="btn" data-act="fb-off">Turn off on this phone</button>' +
         '<p class="hint">A few seconds after every change, each employee’s days and times are published to the staff app, and a full private backup of your records is saved online. Staff log in with their phone number and never see pay, rate, bank or cash.</p>';
     } else {
-      h += '<p class="hint">Turn this on once. Employees then open the staff app, type their phone number and see only their own times. Your records are also backed up online after every change, protected by this password.</p>' +
-        '<label class="field"><span>Manager password (8 characters or more)</span><input type="password" id="fb-pw" data-f="fb-pw" autocomplete="current-password" value="' + esc(ui.netPw || '') + '"></label>' +
-        '<button class="btn primary" data-act="fb-connect"' + (ui.fbBusy ? ' disabled' : '') + '>' + (ui.fbBusy ? 'Connecting…' : 'Turn on') + '</button>' +
+      h += '<p class="hint">Sign in with your manager or supervisor password. Records are shared between your phones, published to the staff app and backed up online after every change.</p>' +
+        '<label class="field"><span>Password (8 characters or more)</span><input type="password" id="fb-pw" data-f="fb-pw" autocomplete="current-password" value="' + esc(ui.netPw || '') + '"></label>' +
+        '<button class="btn primary" data-act="fb-connect"' + (ui.fbBusy ? ' disabled' : '') + '>' + (ui.fbBusy ? 'Connecting…' : 'Sign in') + '</button>' +
         '<p id="fb-status" class="msg' + (ui.fbErr || f.err ? ' err' : '') + '" role="status">' + esc(ui.fbMsg || f.err || '') + '</p>' +
-        '<p class="hint">The first time, this sets your password. Keep it safe: you need it to get your records back on a new phone.</p>';
+        '<p class="hint">The very first sign-in sets the manager password. Keep it safe: you need it to get your records back on a new phone.</p>';
     }
     return h + '</div></section>';
   }
@@ -551,6 +609,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       var sid3 = cardSid(b), s3 = state.staff[sid3]; if (!s3) return;
       if (!fbOn()) { toast('Turn the staff app on first (bottom of this page).'); return; }
       if (phoneKey(s3.phone).length < 7) { toast('Enter ' + s3.name + '’s phone number first.'); return; }
+      if (isSup()) return;
       if (ui.pinReset !== sid3) { ui.pinReset = sid3; render(); return; }
       ui.pinReset = null;
       netApi('POST', 'resetpin', { phone: s3.phone }).then(function (res) {
@@ -565,11 +624,21 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     } else if (act === 'fb-nudge') { nudge('', '');
     } else if (act === 'fb-remind-on') { remindOn();
     } else if (act === 'fb-remind-off') { remindOff();
+    } else if (act === 'sup-save') {
+      var spw = (document.getElementById('sup-pw') || {}).value || '';
+      if (spw.length < 8) { ui.supMsg = 'Use a password of 8 characters or more.'; ui.supErr = true; render(); return; }
+      sha256hex('staffpay:' + spw).then(function (t) { return netApi('POST', 'supervisor', { token: t }); }).then(function () {
+        netSet({ hasSup: true }); ui.supMsg = 'Saved. Give this password to your supervisor.'; ui.supErr = false; ui.supAsk = false; render();
+      }, function (e) { ui.supErr = true; ui.supMsg = e.message === 'same' ? 'Choose a different password from your own.' : netWhy(e); render(); });
+    } else if (act === 'sup-remove') {
+      if (!ui.supAsk) { ui.supAsk = true; render(); return; }
+      ui.supAsk = false;
+      netApi('POST', 'supervisor', { remove: true }).then(function () { netSet({ hasSup: false }); ui.supMsg = 'Supervisor removed. Their password no longer works.'; ui.supErr = false; render(); }, function (e) { ui.supErr = true; ui.supMsg = netWhy(e); render(); });
     } else if (act === 'fb-publish') {
       var el = document.getElementById('fb-status'); if (el) { el.textContent = 'Sending…'; el.className = 'msg'; }
       runSync(true);
     } else if (act === 'fb-off') {
-      netSet({ token: '', err: '' }); ui.fbMsg = ''; ui.fbErr = false; ui.netRestoreAsk = false; render();
+      netSet({ token: '', err: '', role: '' }); ui.fbMsg = ''; ui.fbErr = false; ui.netRestoreAsk = false; render();
     } else if (act === 'fb-restore') {
       if (!ui.netRestoreAsk) { ui.netRestoreAsk = true; render(); return; }
       ui.netRestoreAsk = false;
@@ -580,12 +649,13 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       ui.fbBusy = true; ui.fbMsg = ''; ui.fbErr = false; render();
       var tok = '';
       sha256hex('staffpay:' + pw).then(function (t) { tok = t; return netApi('POST', 'login', {}, t); }).then(function (res) {
-        netSet({ token: tok, err: '', last: 0 }); ui.netPw = ''; ui.fbBusy = false;
-        if (!hasData() && res.hasBackup) {
-          return netRestore().then(function () { render(); toast('Your records were restored from the online backup.'); }, function () { render(); });
-        }
-        render();
-        return runSync(true);
+        netSet({ token: tok, err: '', last: 0, role: res.role || 'admin', hasSup: !!res.hasSupervisor }); ui.netPw = ''; ui.fbBusy = false;
+        return netApi('GET', 'data').then(function (d) {
+          if (d.has && (res.role === 'supervisor' || !hasData() || d.rev > 0)) { adopt(d); render(); toast('Records loaded.'); return; }
+          if (res.role === 'supervisor') { netSet({ err: 'The manager has not saved any records yet.' }); render(); return; }
+          netSet({ rev: d.rev || 0 }); render();
+          return runSync(true);
+        });
       }, function (e) {
         ui.fbBusy = false; ui.fbErr = true;
         ui.fbMsg = e.status === 401 ? 'Wrong password.' : netWhy(e);
@@ -595,7 +665,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   }
   function fbInput(f, t) {
     if (f === 'fb-pw') { ui.netPw = t.value; return true; }
-    if (f === 'fb-hour') return true;
+    if (f === 'fb-hour' || f === 'sup-pw') return true;
     if (f === 'st-phone') {
       var sid = cardSid(t); if (!state.staff[sid]) return true;
       state.staff[sid].phone = t.value.trim(); queueSave('staff', sid, 500); return true;
@@ -677,7 +747,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     var p = pending[k] || (pending[k] = { timer: null, ver: 0 });
     p.ver++; clearTimeout(p.timer); setStatus('saving');
     p.timer = setTimeout(function () { flush(kind, id); }, delay || 0);
-    scheduleSync();
+    markDirty(kind, id); scheduleSync();
   }
   function flush(kind, id) {
     var k = kind + '/' + id, p = pending[k];
@@ -802,7 +872,8 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
     });
   }
-  function render() {
+  function render() { renderCore(); applyRole(); }
+  function renderCore() {
     var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
     if (tabsEl) tabsEl.hidden = sview || !roleKnown;
     if (sview) { app.innerHTML = staffViewHTML(); return; }
@@ -1191,7 +1262,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       sortedStaff().forEach(function (e) { if (!findShift(dayWid(), e[0], ui.day) && !isOff(dayWid(), e[0], ui.day)) { var u2 = usualFor(e[0]); setDayTimes(e[0], u2.inT, u2.outT); } });
       refreshDay();
     }
-    else if (/^(code|fb)-/.test(act)) fbAct(act, b);
+    else if (/^(code|fb|sup)-/.test(act)) fbAct(act, b);
     else if (act === 'bk-email') backupEmail();
     else if (act === 'bk-save') { if (downloadBackup()) { markBackup(); ui.bkMsg = 'Backup file saved to your phone.'; ui.bkErr = false; } else { ui.bkMsg = 'Could not create the backup file.'; ui.bkErr = true; } render(); }
     else if (act === 'bk-restore-yes') restoreApply();
@@ -1407,8 +1478,10 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
 
   /* ---------- start ---------- */
   mode = 'local'; localLoad(); ensureCodesLocal(); render(); setStatus('local');
-  if (fbOn()) { runSync(false); netStatus(); }
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && fbOn()) { runSync(false); netStatus(); } });
+  var netWake = function () { if (fbOn()) { netPoll().then(function () { return runSync(false); }); netStatus(); } };
+  netWake();
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') netWake(); });
+  setInterval(function () { if (document.visibilityState === 'visible' && fbOn()) netPoll(); }, 20000);
   setInterval(function () { if (document.visibilityState === 'visible' && fbOn()) netStatus(); }, 60000);
   if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(function () {}); }
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) { navigator.serviceWorker.register('sw.js').catch(function () {}); }

@@ -94,11 +94,20 @@ export default async (req) => {
   };
 
   const tokenOf = () => { const m = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.get('authorization') || ''); return m ? m[1] : ''; };
-  const isAdmin = async () => {
-    const t = tokenOf(); if (!t) return false;
-    const a = await cfg.get('admin', { type: 'json' }); if (!a) return false;
-    const x = Buffer.from(hashOf(t, a.salt)), y = Buffer.from(a.hash);
-    return x.length === y.length && timingSafeEqual(x, y);
+  const matches = (t, a) => { if (!t || !a) return false; const x = Buffer.from(hashOf(t, a.salt)), y = Buffer.from(a.hash); return x.length === y.length && timingSafeEqual(x, y); };
+  // 'admin' (the manager: everything), 'supervisor' (hours and days off only), or null.
+  const roleOf = async () => {
+    const t = tokenOf(); if (!t) return null;
+    if (matches(t, await cfg.get('admin', { type: 'json' }))) return 'admin';
+    if (matches(t, await cfg.get('supervisor', { type: 'json' }))) return 'supervisor';
+    return null;
+  };
+  const isAdmin = async () => (await roleOf()) === 'admin';
+  const isUser = async () => !!(await roleOf());
+  const sharedState = async () => {
+    const meta = (await bak.get('meta', { type: 'json' })) || {};
+    const doc = await bak.get('latest', { type: 'json' });
+    return { rev: meta.rev || 0, staff: doc ? doc.staff : {}, weeks: doc ? doc.weeks : {}, has: !!doc };
   };
 
   try {
@@ -130,7 +139,7 @@ export default async (req) => {
     }
 
     if (path === 'nudge' && req.method === 'POST') {
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      if (!(await isUser())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
       const body = JSON.parse((await req.text()).slice(0, 300));
       let keys;
       if (body.phone) keys = [phoneKey(body.phone)]; else keys = (await sch.list()).blobs.map((b) => b.key);
@@ -140,7 +149,7 @@ export default async (req) => {
     }
 
     if (path === 'admin-remind' && req.method === 'POST') {
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      if (!(await isUser())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
       const body = JSON.parse((await req.text()).slice(0, 5000));
       const cur = (await cfg.get('remind', { type: 'json' })) || { subs: [] };
       const sub = body.sub;
@@ -176,18 +185,24 @@ export default async (req) => {
       if (!a) {
         const salt = randomBytes(16).toString('hex');
         await cfg.setJSON('admin', { salt, hash: hashOf(t, salt), created: new Date().toISOString() });
-        return json({ ok: true, created: true, hasBackup: false });
+        return json({ ok: true, created: true, role: 'admin', hasBackup: false, hasSupervisor: false });
       }
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const role = await roleOf();
+      if (!role) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
       const meta = await bak.get('meta', { type: 'json' });
-      return json({ ok: true, created: false, hasBackup: !!meta, backupAt: meta ? meta.at : null });
+      return json({ ok: true, created: false, role, hasBackup: !!meta, backupAt: meta ? meta.at : null, hasSupervisor: !!(await cfg.get('supervisor', { type: 'json' })) });
     }
 
     if (path === 'sync' && req.method === 'PUT') {
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const role = await roleOf();
+      if (!role) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
       const text = await req.text();
       if (text.length > 3000000) return json({ error: 'toolarge' }, 413);
       const body = JSON.parse(text);
+      // Someone else saved since this phone last looked: hand back the newest records so it can merge and resend.
+      const cur = await sharedState();
+      if (cur.has && cur.rev > 0 && body.baseRev !== cur.rev) return json({ error: 'stale', rev: cur.rev, staff: cur.staff, weeks: cur.weeks }, 409);
+      if (role === 'supervisor' && !cur.has) return json({ error: 'nodata' }, 409);
       const want = {};
       Object.keys(body.schedules || {}).slice(0, 300).forEach((p) => { const k = phoneKey(p); if (k.length >= 7 && !want[k]) want[k] = cleanSchedule(body.schedules[p]); });
       const { blobs } = await sch.list();
@@ -208,15 +223,55 @@ export default async (req) => {
       }
       let backedUp = false;
       const bk = body.backup;
-      if (bk && typeof bk.staff === 'object' && typeof bk.weeks === 'object' && (Object.keys(bk.staff).length || Object.keys(bk.weeks).length)) {
+      let rev = cur.rev;
+      if (bk && bk.staff && bk.weeks && typeof bk.staff === 'object' && typeof bk.weeks === 'object' && (Object.keys(bk.staff).length || Object.keys(bk.weeks).length)) {
+        let staff = bk.staff, weeks = bk.weeks;
+        if (role === 'supervisor') {
+          // A supervisor records hours and days off. Staff, rates, bank, cash and week settings stay as the manager left them.
+          staff = cur.staff; weeks = {};
+          const ids = Object.keys(cur.weeks).sort(), lastCfg = ids.length ? cur.weeks[ids[ids.length - 1]].cfg : null;
+          Object.keys(cur.weeks).forEach((wid) => { weeks[wid] = cur.weeks[wid]; });
+          Object.keys(bk.weeks).forEach((wid) => {
+            if (!DATE.test(wid)) return;
+            const nw = bk.weeks[wid] || {}, cw = cur.weeks[wid];
+            const snap = {};
+            Object.keys(nw.snap || {}).forEach((sid) => {
+              if (cw && cw.snap && cw.snap[sid]) snap[sid] = cw.snap[sid];
+              else if (staff[sid]) snap[sid] = { name: staff[sid].name, position: staff[sid].position || '', rate: Number(staff[sid].rate) || 0, bank: Number(staff[sid].bank) || 0 };
+            });
+            if (cw && cw.snap) Object.keys(cw.snap).forEach((sid) => { if (!snap[sid]) snap[sid] = cw.snap[sid]; });
+            weeks[wid] = { cfg: cw ? cw.cfg : (lastCfg || nw.cfg || { lunch: 0, otAfter: 40, otPremium: 0 }), snap, shifts: Array.isArray(nw.shifts) ? nw.shifts : [], cash: cw ? cw.cash || {} : {}, off: nw.off && typeof nw.off === 'object' ? nw.off : {} };
+          });
+        }
         const at = new Date().toISOString();
-        const doc = { app: 'weekly-staff-pay', version: 1, exportedAt: at, staff: bk.staff, weeks: bk.weeks };
+        const doc = { app: 'weekly-staff-pay', version: 1, exportedAt: at, staff, weeks };
+        rev = cur.rev + 1;
         await bak.setJSON('latest', doc);
         await bak.setJSON('day-' + at.slice(0, 10), doc);
-        await bak.setJSON('meta', { at });
+        await bak.setJSON('meta', { at, rev, by: role });
         backedUp = true;
       }
-      return json({ ok: true, published: Object.keys(want).length, backedUp, notified, status: await statusOf(Object.keys(want)) });
+      return json({ ok: true, rev, published: Object.keys(want).length, backedUp, notified, status: await statusOf(Object.keys(want)) });
+    }
+
+    if (path === 'data' && req.method === 'GET') {
+      const role = await roleOf();
+      if (!role) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const cur = await sharedState();
+      if (String(cur.rev) === url.searchParams.get('rev')) return json({ ok: true, same: true, rev: cur.rev, role });
+      return json({ ok: true, rev: cur.rev, role, has: cur.has, staff: cur.staff, weeks: cur.weeks });
+    }
+
+    if (path === 'supervisor' && req.method === 'POST') {
+      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const body = JSON.parse((await req.text()).slice(0, 300));
+      if (body.remove) { await cfg.delete('supervisor'); return json({ ok: true, hasSupervisor: false }); }
+      const t = String(body.token || '');
+      if (!/^[a-f0-9]{64}$/.test(t)) return json({ error: 'bad' }, 400);
+      if (t === tokenOf()) return json({ error: 'same' }, 400);
+      const salt = randomBytes(16).toString('hex');
+      await cfg.setJSON('supervisor', { salt, hash: hashOf(t, salt), created: new Date().toISOString() });
+      return json({ ok: true, hasSupervisor: true });
     }
 
     if (path === 'backup' && req.method === 'GET') {
@@ -226,7 +281,7 @@ export default async (req) => {
     }
 
     if (path === 'status' && req.method === 'GET') {
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      if (!(await isUser())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
       const { blobs } = await sch.list();
       return json({ ok: true, status: await statusOf(blobs.map((b) => b.key)) });
     }
