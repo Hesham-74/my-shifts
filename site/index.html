@@ -101,18 +101,30 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>'
   };
 
-  /* saved: { phone, data, fetched } */
+  /* saved: { phone, token, data, fetched } */
   var saved = null;
-  var ui = { wk: mondayOf(todayISO()), phase: 'enter', msg: '', err: false, online: true, busy: false, draft: '' };
+  var ui = { wk: mondayOf(todayISO()), phase: 'enter', step: 'phone', phone: '', msg: '', err: false, online: true, busy: false, draft: '' };
 
   function load() { try { var o = JSON.parse(localStorage.getItem(KEY) || 'null'); if (o && o.phone) saved = o; } catch (e) {} }
   function store() { try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {} }
   function forget() { saved = null; try { localStorage.removeItem(KEY); } catch (e) {} }
 
   function phoneKey(p) { var d = String(p == null ? '' : p).replace(/\D/g, ''); return d.length >= 9 ? d.slice(-9) : d; }
+  function sha256hex(str) {
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)).then(function (buf) {
+      return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+    });
+  }
+  function auth(extra) { var h = extra || {}; if (saved && saved.token) h['Authorization'] = 'Bearer ' + saved.token; return h; }
+  function post(path, body, headers) {
+    var h = headers || {}; h['Content-Type'] = 'application/json';
+    return fetch('/api/' + path, { method: 'POST', headers: h, body: JSON.stringify(body), cache: 'no-store' });
+  }
   function fetchDoc(phone) {
-    return fetch('/api/schedule?phone=' + encodeURIComponent(phoneKey(phone)), { cache: 'no-store' }).then(function (r) {
+    return fetch('/api/schedule?phone=' + encodeURIComponent(phoneKey(phone)), { cache: 'no-store', headers: auth() }).then(function (r) {
       if (r.status === 404 || r.status === 400) return { kind: 'notfound' };
+      if (r.status === 429) return { kind: 'locked' };
+      if (r.status === 401) return r.json().then(function (j) { return { kind: j.error === 'setpin' ? 'setpin' : 'wrongpin' }; }, function () { return { kind: 'wrongpin' }; });
       if (!r.ok) return { kind: 'error' };
       return r.json().then(function (d) {
         return { kind: 'ok', data: { name: d.name || '', shifts: (d.shifts || []).filter(Boolean), off: (d.off || []).filter(Boolean), upd: d.upd || '', chg: d.chg || '' } };
@@ -125,7 +137,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     if (!saved || !saved.data || !saved.data.upd || document.visibilityState !== 'visible') return;
     if (saved.seenUpd === saved.data.upd) return;
     var upd = saved.data.upd;
-    fetch('/api/seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: saved.phone, upd: upd }) })
+    post('seen', { phone: saved.phone, upd: upd }, auth())
       .then(function (r) { if (r.ok && saved) { saved.seenUpd = upd; store(); } }, function () {});
   }
 
@@ -144,7 +156,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     }).then(function (a) {
       return a[0].pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(a[1].key) });
     }).then(function (sub) {
-      return fetch('/api/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: saved.phone, sub: sub.toJSON() }) });
+      return post('subscribe', { phone: saved.phone, sub: sub.toJSON() }, auth());
     }).then(function (r) {
       if (!r.ok) throw new Error('save');
       saved.push = true; store(); ui.pushMsg = ''; render();
@@ -169,7 +181,12 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
       ui.busy = false; ui.online = true;
       if (res.kind === 'ok') { saved.data = res.data; saved.fetched = Date.now(); store(); ui.phase = 'show'; ui.msg = ''; markSeen(); }
       else if (res.kind === 'notfound') {
-        forget(); ui.phase = 'enter'; ui.err = true; ui.msg = 'That phone number is not on the staff list. Check with your manager that they saved your number.';
+        forget(); ui.phase = 'enter'; ui.step = 'phone'; ui.err = true; ui.msg = 'That phone number is not on the staff list. Check with your manager that they saved your number.';
+      } else if (res.kind === 'setpin' || res.kind === 'wrongpin') {
+        var ph = saved.phone, had = !!saved.token; forget(); ui.phone = ph; ui.phase = 'enter'; ui.step = res.kind === 'setpin' ? 'new' : 'pin'; ui.err = had;
+        ui.msg = res.kind === 'setpin' ? (had ? 'Your code was reset by your manager. Make a new one.' : '') : (had ? 'That code is not right. Try again.' : '');
+      } else if (res.kind === 'locked') {
+        var ph2 = saved.phone; forget(); ui.phone = ph2; ui.phase = 'enter'; ui.step = 'pin'; ui.err = true; ui.msg = 'Too many wrong tries. Wait 15 minutes, or ask your manager to reset your code.';
             } else { ui.online = false; if (!saved.data) { ui.phase = 'enter'; ui.err = true; ui.msg = 'Could not load your times. Try again in a moment.'; } }
       render();
     }, function () {
@@ -196,11 +213,26 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
   var times = function (x) { return x.i + ' – ' + (x.o || '…'); };
 
   function enterHTML() {
+    var msg = '<p class="msg' + (ui.err ? ' err' : '') + '" role="status">' + esc(ui.busy ? 'One moment…' : ui.msg) + '</p>';
+    if (ui.step === 'new') {
+      return '<form class="card" id="f" autocomplete="off"><h2 class="title">Make your code</h2>' +
+        '<p class="hint">Choose a code only you know, 4 or more numbers or letters. You will need it if you change phone.</p>' +
+        '<label>Your new code<input id="pin" type="password" inputmode="text" autocomplete="new-password" minlength="4" maxlength="40"></label>' +
+        '<label>The same code again<input id="pin2" type="password" inputmode="text" autocomplete="new-password" minlength="4" maxlength="40"></label>' +
+        '<button class="btn primary" type="submit">Save and show my times</button>' + msg +
+        '<button class="btn" type="button" data-act="back">Use a different number</button></form>';
+    }
+    if (ui.step === 'pin') {
+      return '<form class="card" id="f" autocomplete="off"><h2 class="title">Your code</h2>' +
+        '<label>Enter your code<input id="pin" type="password" inputmode="text" autocomplete="current-password" maxlength="40"></label>' +
+        '<button class="btn primary" type="submit">Show my times</button>' + msg +
+        '<p class="hint">Forgot it? Ask your manager to reset your code, then make a new one here.</p>' +
+        '<button class="btn" type="button" data-act="back">Use a different number</button></form>';
+    }
     return '<form class="card" id="f" autocomplete="off"><h2 class="title">Your work times</h2>' +
       '<label>Your phone number<input id="code" type="tel" inputmode="tel" autocomplete="tel" placeholder="085 123 4567" value="' + esc(ui.draft) + '"></label>' +
-      '<button class="btn primary" type="submit">Show my times</button>' +
-      '<p class="msg' + (ui.err ? ' err' : '') + '" role="status">' + esc(ui.busy ? 'Looking for your times…' : ui.msg) + '</p>' +
-      '<p class="hint">Enter the phone number your manager has for you. You only enter it once on this phone.</p></form>';
+      '<button class="btn primary" type="submit">Next</button>' + msg +
+      '<p class="hint">Enter the phone number your manager has for you.</p></form>';
   }
   function showHTML() {
     var d = saved.data, today = todayISO(), wk = ui.wk, minWk = mondayOf(addDays(today, -14)), maxWk = addDays(mondayOf(today), 56), nx = nextShift(d);
@@ -222,7 +254,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     h += '<p class="hint">' + (ui.online ? '' : 'You are offline. Showing the last times saved on this phone. ') +
       (upd && !isNaN(upd.getTime()) ? 'Updated by your manager ' + esc(fWhen.format(upd)) + '. ' : '') +
       'Ask your manager if something looks wrong.</p>' +
-      '<button class="btn" data-act="switch" style="justify-self:start">Not you? Change number</button>';
+      '<button class="btn" data-act="switch" style="justify-self:start">Log out</button>';
     return h;
   }
   function render() {
@@ -231,14 +263,35 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     app.innerHTML = ui.phase === 'show' && saved && saved.data ? showHTML() : enterHTML();
   }
 
+  function fail(m) { ui.busy = false; ui.err = true; ui.msg = m; render(); }
   document.addEventListener('submit', function (e) {
     if (e.target.id !== 'f') return;
     e.preventDefault();
-    var v = document.getElementById('code').value; ui.draft = v;
-    if (phoneKey(v).length < 7) { ui.err = true; ui.msg = 'Enter your full phone number.'; render(); return; }
-    saved = { phone: phoneKey(v), data: null, fetched: 0 };
-    ui.err = false; ui.msg = ''; ui.phase = 'enter'; ui.busy = false;
-    refresh(true); render();
+    if (ui.busy) return;
+    if (ui.step === 'phone') {
+      var v = document.getElementById('code').value; ui.draft = v;
+      if (phoneKey(v).length < 7) return fail('Enter your full phone number.');
+      ui.busy = true; ui.err = false; ui.msg = ''; render();
+      post('enter', { phone: phoneKey(v) }).then(function (r) {
+        if (r.status === 404) return fail('That phone number is not on the staff list. Check with your manager that they saved your number.');
+        if (!r.ok) return fail('Could not check your number. Try again in a moment.');
+        return r.json().then(function (j) { ui.busy = false; ui.phone = phoneKey(v); ui.step = j.hasPin ? 'pin' : 'new'; ui.msg = ''; ui.err = false; render(); var el = document.getElementById('pin'); if (el) el.focus(); });
+      }, function () { fail('No internet connection. Connect and try again.'); });
+      return;
+    }
+    var pin = document.getElementById('pin').value, isNew = ui.step === 'new';
+    if (pin.length < 4) return fail('Use 4 or more numbers or letters.');
+    if (isNew && pin !== document.getElementById('pin2').value) return fail('The two codes are not the same.');
+    ui.busy = true; ui.err = false; ui.msg = ''; render();
+    sha256hex('shifts:' + ui.phone + ':' + pin).then(function (tok) {
+      var go = function () { saved = { phone: ui.phone, token: tok, data: null, fetched: 0 }; store(); ui.busy = false; refresh(true); render(); };
+      if (!isNew) return go();
+      return post('setpin', { phone: ui.phone }, { 'Authorization': 'Bearer ' + tok }).then(function (r) {
+        if (r.status === 409) { ui.step = 'pin'; return fail('This number already has a code. Enter it, or ask your manager to reset it.'); }
+        if (!r.ok) return fail('Could not save your code. Try again in a moment.');
+        go();
+      });
+    }).catch(function () { fail('No internet connection. Connect and try again.'); });
   });
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-act]'); if (!b) return;
@@ -248,7 +301,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     else if (a === 'this') { ui.wk = mondayOf(todayISO()); render(); }
     else if (a === 'refresh') refresh(true);
     else if (a === 'push-on') pushOn();
-    else if (a === 'switch') { forget(); ui.phase = 'enter'; ui.draft = ''; ui.err = false; ui.msg = ''; render(); }
+    else if (a === 'switch' || a === 'back') { forget(); ui.phase = 'enter'; ui.step = 'phone'; ui.draft = ''; ui.err = false; ui.msg = ''; render(); }
   });
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && saved) { markSeen(); refresh(false); } });
   window.addEventListener('online', function () { if (saved) refresh(false); });

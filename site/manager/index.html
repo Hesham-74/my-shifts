@@ -442,7 +442,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     var a = !st.chg ? (st.lastSeen ? 'Last opened ' + fWhenS.format(new Date(st.lastSeen)) : 'Has not opened the app yet')
       : st.seen ? 'Seen ' + fWhenS.format(new Date(st.seen))
       : 'Changed ' + fWhenS.format(new Date(st.chg)) + ', not seen yet';
-    return a + (st.push ? ' · notifications on' : ' · notifications off');
+    return a + (st.push ? ' · notifications on' : ' · notifications off') + (st.pin ? ' · code set' : ' · no code yet');
   }
   function seenShow() {
     Object.keys(state.staff).forEach(function (sid) {
@@ -466,7 +466,8 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   /* ---------- staff tab pieces ---------- */
   function codeRow(s, id) {
     return '<label class="field"><span>Phone number (their login to the staff app)</span><input type="tel" inputmode="tel" autocomplete="off" data-f="st-phone" placeholder="085 123 4567" value="' + esc(s.phone || '') + '"></label>' +
-      '<div class="coderow"><p class="hint seen' + (/not seen yet/.test(seenLine(s)) ? ' wait' : /^Seen/.test(seenLine(s)) ? ' ok' : '') + '" data-seen role="status">' + esc(seenLine(s)) + '</p><div class="cbtns"><button class="btn" data-act="code-send">Send app link to ' + esc(s.name) + '</button></div></div>';
+      '<div class="coderow"><p class="hint seen' + (/not seen yet/.test(seenLine(s)) ? ' wait' : /^Seen/.test(seenLine(s)) ? ' ok' : '') + '" data-seen role="status">' + esc(seenLine(s)) + '</p><div class="cbtns"><button class="btn" data-act="code-send">Send app link to ' + esc(s.name) + '</button>' +
+      '<button class="btn' + (ui.pinReset === id ? ' danger' : '') + '" data-act="code-reset">' + (ui.pinReset === id ? 'Tap again: they must make a new code' : 'Reset their code') + '</button></div></div>';
   }
   function publishHTML() {
     var f = netCfg(), on = fbOn();
@@ -491,9 +492,19 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     if (act === 'code-send') {
       var sid = cardSid(b), s = state.staff[sid]; if (!s) return;
       if (phoneKey(s.phone).length < 7) { toast('Enter ' + s.name + '’s phone number first.'); return; }
-      var text = 'Hi ' + s.name + ',\nSee your work times here: ' + location.origin + '/\n(iPhone: Share, then Add to Home Screen. Android: menu, then Install app.)\nOpen it and enter your phone number: ' + s.phone;
+      var text = 'Hi ' + s.name + ',\nSee your work times here: ' + location.origin + '/\n(iPhone: Share, then Add to Home Screen. Android: menu, then Install app.)\nOpen it and enter your phone number: ' + s.phone + '\nThe first time, you choose your own code.';
       if (navigator.share) { navigator.share({ text: text }).catch(function () {}); return; }
       try { navigator.clipboard.writeText(text).then(function () { toast('Message copied. Paste it into WhatsApp.'); }, function () { toast(text); }); } catch (e) { toast(text); }
+    } else if (act === 'code-reset') {
+      var sid3 = cardSid(b), s3 = state.staff[sid3]; if (!s3) return;
+      if (!fbOn()) { toast('Turn the staff app on first (bottom of this page).'); return; }
+      if (phoneKey(s3.phone).length < 7) { toast('Enter ' + s3.name + '’s phone number first.'); return; }
+      if (ui.pinReset !== sid3) { ui.pinReset = sid3; render(); return; }
+      ui.pinReset = null;
+      netApi('POST', 'resetpin', { phone: s3.phone }).then(function (res) {
+        netRun.status = netRun.status || {}; Object.keys(res.status || {}).forEach(function (k) { netRun.status[k] = res.status[k]; });
+        render(); toast(s3.name + ' can now make a new code in the staff app.');
+      }, function (e) { render(); toast(netWhy(e)); });
     } else if (act === 'fb-publish') {
       var el = document.getElementById('fb-status'); if (el) { el.textContent = 'Sending…'; el.className = 'msg'; }
       runSync(true);

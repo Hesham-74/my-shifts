@@ -1,5 +1,8 @@
 // Small server for the staff apps.
-//   GET  /api/schedule?phone=...   anyone: one employee's days and times (never pay)
+//   POST /api/enter                employee: is this phone on the list, and does it have a code yet?
+//   POST /api/setpin               employee: create their own code (only when none is set)
+//   GET  /api/schedule?phone=...   employee (phone + their code): days and times (never pay)
+//   POST /api/resetpin             manager: clear one employee's code so they can make a new one
 //   POST /api/login                manager: first call sets the password, later calls check it
 //   PUT  /api/sync                 manager: replace all schedules + save a full private backup
 //   GET  /api/backup               manager: read the latest backup
@@ -40,6 +43,22 @@ export default async (req) => {
   const bak = getStore({ name: 'backup', consistency: 'strong' });
   const subs = getStore({ name: 'subs', consistency: 'strong' });
   const seen = getStore({ name: 'seen', consistency: 'strong' });
+  const pins = getStore({ name: 'pins', consistency: 'strong' });
+
+  // Employee check: 'ok', 'setpin' (no code yet), 'wrongpin', or 'locked' (too many wrong tries).
+  const staffAuth = async (k) => {
+    const pin = await pins.get(k, { type: 'json' });
+    if (!pin) return 'setpin';
+    if (pin.lockUntil && Date.now() < pin.lockUntil) return 'locked';
+    const t = tokenOf();
+    if (!t) return 'wrongpin';
+    { const x = Buffer.from(hashOf(t, pin.salt)), y = Buffer.from(pin.hash); if (x.length === y.length && timingSafeEqual(x, y)) { if (pin.fails) await pins.setJSON(k, { salt: pin.salt, hash: pin.hash, fails: 0 }); return 'ok'; } }
+    const fails = (pin.fails || 0) + 1;
+    await pins.setJSON(k, { salt: pin.salt, hash: pin.hash, fails: fails >= 5 ? 0 : fails, lockUntil: fails >= 5 ? Date.now() + 15 * 60000 : 0 });
+    await sleep(800);
+    return 'wrongpin';
+  };
+  const denied = (why) => json({ error: why }, why === 'locked' ? 429 : 401);
 
   const vapid = async () => {
     let v = await cfg.get('vapid', { type: 'json' });
@@ -67,7 +86,7 @@ export default async (req) => {
       const d = await sch.get(k, { type: 'json' }); if (!d) continue;
       const sn = await seen.get(k, { type: 'json' });
       const sl = (await subs.get(k, { type: 'json' })) || [];
-      out[k] = { chg: d.chg || null, seen: sn && sn.upd === d.upd ? sn.at : null, lastSeen: sn ? sn.at : null, push: sl.length > 0 };
+      out[k] = { pin: !!(await pins.get(k, { type: 'json' })), chg: d.chg || null, seen: sn && sn.upd === d.upd ? sn.at : null, lastSeen: sn ? sn.at : null, push: sl.length > 0 };
     }
     return out;
   };
@@ -85,7 +104,35 @@ export default async (req) => {
       const k = phoneKey(url.searchParams.get('phone'));
       if (k.length < 7) return json({ error: 'badphone' }, 400);
       const d = await sch.get(k, { type: 'json' });
-      return d ? json(d) : json({ error: 'notfound' }, 404);
+      if (!d) return json({ error: 'notfound' }, 404);
+      const a = await staffAuth(k); if (a !== 'ok') return denied(a);
+      return json(d);
+    }
+
+    if (path === 'enter' && req.method === 'POST') {
+      const body = JSON.parse((await req.text()).slice(0, 300));
+      const k = phoneKey(body.phone);
+      if (k.length < 7 || !(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
+      return json({ ok: true, hasPin: !!(await pins.get(k, { type: 'json' })) });
+    }
+
+    if (path === 'setpin' && req.method === 'POST') {
+      const body = JSON.parse((await req.text()).slice(0, 300));
+      const k = phoneKey(body.phone), t = tokenOf();
+      if (k.length < 7 || !t) return json({ error: 'bad' }, 400);
+      if (!(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
+      if (await pins.get(k, { type: 'json' })) return json({ error: 'haspin' }, 409);
+      const salt = randomBytes(16).toString('hex');
+      await pins.setJSON(k, { salt, hash: hashOf(t, salt), fails: 0 });
+      return json({ ok: true });
+    }
+
+    if (path === 'resetpin' && req.method === 'POST') {
+      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const body = JSON.parse((await req.text()).slice(0, 300));
+      const k = phoneKey(body.phone);
+      await pins.delete(k); await subs.delete(k);
+      return json({ ok: true, status: await statusOf([k]) });
     }
 
     if (path === 'login' && req.method === 'POST') {
@@ -109,7 +156,7 @@ export default async (req) => {
       const want = {};
       Object.keys(body.schedules || {}).slice(0, 300).forEach((p) => { const k = phoneKey(p); if (k.length >= 7 && !want[k]) want[k] = cleanSchedule(body.schedules[p]); });
       const { blobs } = await sch.list();
-      for (const b of blobs) if (!want[b.key]) { await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); }
+      for (const b of blobs) if (!want[b.key]) { await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); await pins.delete(b.key); }
       const now = new Date().toISOString();
       const today = DATE.test(body.today) ? body.today : now.slice(0, 10);
       let notified = 0;
@@ -156,6 +203,7 @@ export default async (req) => {
       const k = phoneKey(body.phone), sub = body.sub;
       if (k.length < 7 || !sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) return json({ error: 'bad' }, 400);
       if (!(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
+      const a = await staffAuth(k); if (a !== 'ok') return denied(a);
       const list = ((await subs.get(k, { type: 'json' })) || []).filter((x) => x.endpoint !== sub.endpoint);
       list.push({ endpoint: sub.endpoint, keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } });
       await subs.setJSON(k, list.slice(-5));
@@ -167,6 +215,7 @@ export default async (req) => {
       const k = phoneKey(body.phone);
       const d = k.length >= 7 ? await sch.get(k, { type: 'json' }) : null;
       if (!d) return json({ error: 'notfound' }, 404);
+      const a = await staffAuth(k); if (a !== 'ok') return denied(a);
       if (body.upd && body.upd === d.upd) await seen.setJSON(k, { at: new Date().toISOString(), upd: d.upd });
       return json({ ok: true });
     }
