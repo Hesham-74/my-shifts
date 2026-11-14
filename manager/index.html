@@ -1,0 +1,1358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F3F5F9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1420" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Staff Pay">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<title>Weekly Staff Pay</title>
+<style>
+html { -webkit-text-size-adjust: 100%; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; }
+[hidden] { display: none !important; }
+img { max-width: 100%; }
+/* Layout: one narrow ledger column built for a phone. Sticky tab bar on top; a week is a stack of
+   totals, one pay card per employee, then the sign-in log. Numbers set in Plex Mono like a pay slip. */
+:root {
+  --bg: #F3F5F9;
+  --surface: #FFFFFF;
+  --surface-2: #EBF0F7;
+  --ink: #14213A;
+  --ink-2: #566580;
+  --line: #D8DFEA;
+  --accent: #2468C8;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #E1ECFB;
+  --good: #1B8656;
+  --bad: #C23B3B;
+  --bad-soft: #FBE6E6;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-num: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1420; --surface: #172033; --surface-2: #1F2A42; --ink: #E8EDF6; --ink-2: #9CA9C1;
+    --line: #2B3750; --accent: #5C9DF2; --accent-ink: #0A111D; --accent-soft: #1B2C4A;
+    --good: #4CC38A; --bad: #F27D7D; --bad-soft: #3A2127; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1420; --surface: #172033; --surface-2: #1F2A42; --ink: #E8EDF6; --ink-2: #9CA9C1;
+  --line: #2B3750; --accent: #5C9DF2; --accent-ink: #0A111D; --accent-soft: #1B2C4A;
+  --good: #4CC38A; --bad: #F27D7D; --bad-soft: #3A2127; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.45; min-height: 100vh; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 10; }
+h1, h2, h3, p { margin: 0; }
+button, input, select { font: inherit; color: inherit; }
+.gut { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.col { max-width: 760px; margin-inline: auto; width: 100%; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-2); }
+
+/* header */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9; background: var(--bg); border-bottom: 1px solid var(--line); }
+.top-in { padding-block: 12px 10px; display: grid; gap: 10px; }
+.bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.bar h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+.status { font-size: 12px; color: var(--ink-2); text-align: right; }
+.status.err { color: var(--bad); font-weight: 600; }
+.tabs { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 3px; }
+.tab { border: 0; background: transparent; padding: 8px 2px; border-radius: 8px; font-weight: 600; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(10, 20, 40, .12); }
+
+main { padding-block: 16px 96px; display: grid; gap: 16px; align-content: start; }
+
+/* shared pieces */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.sec-title { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 10px; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 9px 14px; font-weight: 600; cursor: pointer; min-height: 40px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: default; }
+.icon { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; width: 40px; height: 40px; display: grid; place-items: center; cursor: pointer; color: var(--ink); flex: none; }
+.icon.danger { color: var(--bad); }
+.icon svg { width: 18px; height: 18px; display: block; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.field { display: grid; gap: 4px; min-width: 0; }
+.field > span { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+input[type="text"], input[type="number"], input[type="date"], input[type="time"], input[type="email"], input[type="password"], select {
+  width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 16px; min-height: 40px;
+}
+input.num { text-align: right; }
+.hint { font-size: 12.5px; color: var(--ink-2); }
+.msg { font-size: 13px; min-height: 18px; }
+.msg.err { color: var(--bad); }
+.empty { text-align: center; padding: 26px 16px; display: grid; gap: 10px; justify-items: center; color: var(--ink-2); }
+.empty strong { color: var(--ink); font-size: 16px; }
+
+/* week navigation */
+.weeknav { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+.weeklabel { text-align: center; display: grid; }
+.weeklabel strong { font-size: 17px; letter-spacing: -0.01em; }
+.weeklabel span { font-size: 12.5px; color: var(--ink-2); }
+.navtools { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-top: 12px; }
+.navtools .field { flex: 1 1 160px; }
+
+/* totals */
+.tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+@media (min-width: 560px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.tile span { font-size: 12px; font-weight: 600; color: var(--ink-2); display: block; }
+.tile b { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 19px; font-weight: 600; display: block; overflow-wrap: anywhere; }
+.tile.main { background: var(--accent-soft); border-color: transparent; }
+
+/* pay cards */
+.pay { display: grid; gap: 12px; }
+.pay-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.pay-head h3 { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+.pay-head p { font-size: 13px; color: var(--ink-2); }
+.rate { width: 112px; flex: none; }
+.warn { font-size: 12px; font-weight: 600; color: var(--bad); }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 12px; margin: 0; }
+@media (min-width: 480px) { .stats { grid-template-columns: repeat(4, 1fr); } }
+.stats dt { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.stats dd { margin: 0; font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 500; }
+.stats dd small { display: block; font-size: 11.5px; color: var(--ink-2); font-family: var(--font-body); min-height: 15px; }
+.stats .total dd { font-weight: 600; font-size: 16px; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; padding-top: 12px; border-top: 1px dashed var(--line); }
+.bank { display: grid; gap: 4px; }
+.bank > span { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.bank strong { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 17px; min-height: 40px; display: flex; align-items: center; justify-content: flex-end; }
+.pay.over .bank strong { color: var(--bad); }
+.pay.over .split { border-top-color: var(--bad); }
+.overnote { grid-column: 1 / -1; font-size: 12.5px; color: var(--bad); font-weight: 600; }
+
+/* sign-in */
+.chips { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 6px 0; display: grid; justify-items: center; cursor: pointer; min-width: 0; }
+.chip span { font-size: 11.5px; color: var(--ink-2); font-weight: 600; }
+.chip b { font-family: var(--font-num); font-size: 15px; font-weight: 600; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
+.chip[aria-pressed="true"] span, .chip[aria-pressed="true"] b { color: var(--accent-ink); }
+.addform { display: grid; gap: 12px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.shifts { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.shift { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding-top: 10px; border-top: 1px solid var(--line); }
+.shift:first-child { border-top: 0; padding-top: 0; }
+.shift .who { font-weight: 600; overflow-wrap: anywhere; }
+.shift .times { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 64px; gap: 8px; align-items: center; }
+.shift .times input[type="date"] { grid-column: 1 / -1; }
+.shift .hrs { text-align: right; font-weight: 600; }
+.shift .del { grid-column: 2; grid-row: 1; }
+
+details.rules summary { cursor: pointer; font-weight: 600; }
+details.rules .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+
+/* daily entry */
+.tiles.two { grid-template-columns: repeat(2, 1fr); }
+.dayrow { display: grid; gap: 12px; }
+.dr-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.dr-head h3 { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+.dr-head p { font-size: 13px; color: var(--ink-2); }
+.dr-head .hrs { font-size: 20px; font-weight: 600; }
+.dr-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dayrow input[type="time"] { min-height: 46px; font-size: 18px; }
+.dr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dr-actions .btn { flex: 1 1 0; }
+.dr-actions .btn:first-child { flex-basis: 100%; }
+.dayrow.isoff { background: var(--surface-2); }
+.dayrow.isoff .hrs { color: var(--ink-2); }
+input:disabled { opacity: .5; }
+.dayhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.dayhead .sec-title { margin: 0; }
+.weekso { display: grid; gap: 12px; }
+
+.tabs[hidden] { display: none; }
+/* staff view */
+.svnext { display: grid; gap: 2px; }
+.svnext b { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.svnext .big { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 24px; font-weight: 600; }
+.svnext .when { color: var(--ink-2); }
+.svdays { list-style: none; margin: 0; padding: 0; display: grid; }
+.svday { display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: center; padding: 12px 10px; border-top: 1px solid var(--line); }
+.svday:first-child { border-top: 0; }
+.svday.today { background: var(--accent-soft); border-radius: 8px; border-top-color: transparent; }
+.svday.today + .svday { border-top-color: transparent; }
+.svd { display: grid; line-height: 1.2; }
+.svd b { font-size: 15px; }
+.svd span { font-size: 12.5px; color: var(--ink-2); }
+.svt { display: grid; gap: 2px; min-width: 0; }
+.svtime { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 600; }
+.svoff { font-weight: 600; color: var(--ink-2); }
+.svnone { color: var(--ink-2); opacity: .65; }
+
+/* weekly timetable */
+.tt-wrap { overflow-x: auto; }
+.tt { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 620px; font-size: 13px; }
+.tt th, .tt td { padding: 8px 6px; text-align: center; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+.tt thead th { font-size: 12px; font-weight: 600; color: var(--ink-2); line-height: 1.25; }
+.tt th:first-child, .tt td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 84px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; font-size: 13px; border-right: 1px solid var(--line); color: var(--ink); }
+.tt thead th:first-child { color: var(--ink-2); font-size: 12px; }
+.tt td b { display: block; font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 600; }
+.tt td small { display: block; font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 11px; color: var(--ink-2); line-height: 1.35; }
+.tt .off { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.tt .none { color: var(--ink-2); opacity: .5; }
+.tt th.today { color: var(--accent); }
+.tt td.today { background: var(--accent-soft); }
+.tt tbody tr:last-child th, .tt tbody tr:last-child td { border-bottom: 1px solid var(--line); }
+.tt tfoot th, .tt tfoot td { border-bottom: 0; background: var(--surface-2); font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 600; }
+.tt tfoot th:first-child { font-family: var(--font-body); }
+
+/* monthly report */
+.mstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0 0; }
+.mstats dt { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.mstats dd { margin: 0; font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
+.mstats .total dd { font-weight: 600; }
+
+/* staff + history */
+.staffrow { display: grid; gap: 12px; }
+.staffrow .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.staffrow .fields .field:first-child, .staffrow .fields .field:nth-child(4), .staffrow .fields .field:nth-child(5) { grid-column: 1 / -1; }
+.staffrow .foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+.hist { width: 100%; text-align: left; cursor: pointer; display: grid; gap: 8px; }
+.hist-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.hist-head strong { font-size: 15.5px; }
+.hist-nums { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.hist-nums span { display: block; font-size: 11.5px; color: var(--ink-2); font-weight: 600; }
+.hist-nums b { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 13.5px; font-weight: 500; overflow-wrap: anywhere; }
+@media (max-width: 420px) { .hist-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.nudge { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; background: var(--accent-soft); border-color: transparent; }
+.nudge p { margin-top: 2px; }
+input[type="file"] { font-size: 14px; width: 100%; min-width: 0; }
+.staffrow .fields .coderow { grid-column: 1 / -1; display: grid; gap: 8px; background: var(--surface-2); border-radius: 8px; padding: 10px; }
+.coderow .cl { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.coderow .cv { font-size: 17px; letter-spacing: .04em; word-break: break-all; }
+.coderow .cbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.coderow .cbtns .btn { flex: 1 1 120px; }
+
+/* toast */
+.toast { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; justify-content: center; padding: 12px max(16px, env(safe-area-inset-right, 0px)) calc(14px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); pointer-events: none; }
+.toast-in { pointer-events: auto; background: var(--ink); color: var(--bg); border-radius: 10px; padding: 10px 14px; display: flex; gap: 14px; align-items: center; font-size: 14px; box-shadow: 0 6px 24px rgba(0, 0, 0, .25); }
+.toast-in button { background: transparent; border: 0; color: var(--accent-soft); font-weight: 700; cursor: pointer; padding: 4px 2px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) { .toast-in { animation: up .18s ease-out; } @keyframes up { from { transform: translateY(8px); opacity: 0; } } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in gut col">
+    <div class="bar"><h1>Weekly Staff Pay</h1><span id="status" class="status" role="status"></span></div>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" data-act="tab" data-tab="today" id="tab-today">Today</button>
+      <button class="tab" role="tab" data-act="tab" data-tab="week" id="tab-week">Week</button>
+      <button class="tab" role="tab" data-act="tab" data-tab="staff" id="tab-staff">Staff</button>
+      <button class="tab" role="tab" data-act="tab" data-tab="month" id="tab-month">Month</button>
+      <button class="tab" role="tab" data-act="tab" data-tab="backup" id="tab-backup">Backup</button>
+    </nav>
+  </div>
+</header>
+<main id="app" class="gut col"><p class="muted">Loading your staff and weeks…</p></main>
+<div id="toast" class="toast" hidden></div>
+
+<script>
+(function () {
+  'use strict';
+  var app = document.getElementById('app');
+  var toastEl = document.getElementById('toast');
+  var statusEl = document.getElementById('status');
+
+  /* ---------- helpers ---------- */
+  var clone = function (o) { return JSON.parse(JSON.stringify(o)); };
+  var num = function (x) { var n = parseFloat(String(x == null ? '' : x).replace(',', '.')); return isFinite(n) ? n : 0; };
+  var round2 = function (x) { return Math.round((x + Number.EPSILON) * 100) / 100; };
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var iso = function (d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+  var parse = function (s) { var p = s.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); };
+  var addDays = function (s, n) { var d = parse(s); d.setDate(d.getDate() + n); return iso(d); };
+  var mondayOf = function (s) { var d = parse(s); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return iso(d); };
+  var todayISO = function () { return iso(new Date()); };
+  var fShort = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
+  var fDay = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
+  var fLong = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  var fMonth = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric' });
+  var EUR = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' });
+  var eur = function (n) { return EUR.format(n); };
+  var fmtHM = function (m) { m = Math.round(m); return Math.floor(m / 60) + ':' + pad(m % 60); };
+  var toMin = function (t) { if (!t) return NaN; var p = t.split(':').map(Number); return p[0] * 60 + p[1]; };
+  var uid = function (p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); };
+
+  var ICON = {
+    left: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+    right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3"/></svg>'
+  };
+
+  /* ---------- state + storage ---------- */
+  var DEF_CFG = { lunch: 0, otAfter: 40, otPremium: 0 };
+  var state = { staff: {}, weeks: {} };
+  var DB = null, mode = 'loading';
+  var loaded = { staff: false, weeks: false };
+  var loadTimer = null;
+  var ui = {
+    tab: 'today', day: todayISO(), month: todayISO().slice(0, 7), svWeek: mondayOf(todayISO()), preview: false, wid: mondayOf(todayISO()), slow: false, loadError: false,
+    form: { sid: '', days: [], inT: '08:00', outT: '17:00' }, msg: '', msgErr: false,
+    confirmRm: null, newStaff: { name: '', position: '', rate: '', bank: '' }, staffMsg: ''
+  };
+  var LS = 'weekly-staff-pay-v1';
+  var memOnly = false;
+
+  function localLoad() { try { var j = localStorage.getItem(LS); if (j) { var o = JSON.parse(j); state.staff = o.staff || {}; state.weeks = o.weeks || {}; } } catch (e) { memOnly = true; } }
+  function localSave() { try { localStorage.setItem(LS, JSON.stringify(state)); return true; } catch (e) { memOnly = true; return false; } }
+
+  function setStatus(kind) {
+    var map = {
+      saving: ['Saving…', ''], saved: ['Saved', ''], cloud: ['', ''],
+      local: [memOnly ? 'Not saved: storage blocked' : 'Saved on this device', memOnly ? 'err' : ''],
+      error: ['Could not save. Check your connection.', 'err']
+    };
+    var m = map[kind] || ['', ''];
+    statusEl.textContent = m[0]; statusEl.className = 'status ' + m[1];
+  }
+
+  var pending = {}, chains = {};
+
+  /* ---------- roles, staff codes and the staff schedule ---------- */
+  var role = 'admin', codesDone = false, roleKnown = !(window.claude && window.claude.use);
+  var sync = { known: null, loading: false, timer: null, chain: Promise.resolve() };
+  var sv = { code: '', data: null, state: 'idle', unsub: null, msg: '' };
+  var SVKEY = 'weekly-staff-pay-code';
+
+  function canon(o) {
+    return JSON.stringify(o, function (k, v) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) { var r = {}; Object.keys(v).sort().forEach(function (x) { r[x] = v[x]; }); return r; }
+      return v;
+    });
+  }
+  var CODE_OK = /^[A-Z2-9]{6}$/;
+  function genCode() {
+    var used = {}, c, A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    Object.keys(state.staff).forEach(function (k) { if (state.staff[k].code) used[state.staff[k].code] = 1; });
+    do {
+      var a = new Uint32Array(6); (window.crypto || window.msCrypto).getRandomValues(a);
+      c = ''; for (var i = 0; i < 6; i++) c += A[a[i] % A.length];
+    } while (used[c]);
+    return c;
+  }
+  /* Every employee gets a random 6-character code. Old numeric codes are replaced. */
+  function ensureCodesLocal() {
+    var ch = false;
+    Object.keys(state.staff).forEach(function (sid) { if (!CODE_OK.test(state.staff[sid].code || '')) { state.staff[sid].code = genCode(); ch = true; } });
+    if (ch) localSave();
+    return ch;
+  }
+  /* What a worker may see: name, shifts and days off. No rates, pay, bank or cash. */
+  function buildSchedule(sid) {
+    var from = addDays(todayISO(), -14), shifts = [], off = [];
+    Object.keys(state.weeks).forEach(function (wid) {
+      var w = state.weeks[wid]; if (addDays(wid, 6) < from) return;
+      (w.shifts || []).forEach(function (x) { if (x.sid === sid && x.date >= from && x.in) shifts.push({ d: x.date, i: x.in, o: x.out || '' }); });
+      Object.keys(w.off || {}).forEach(function (d) { if (d >= from && (w.off[d] || []).indexOf(sid) > -1) off.push(d); });
+    });
+    shifts.sort(function (a, b) { return a.d.localeCompare(b.d) || a.i.localeCompare(b.i); }); off.sort();
+    return { name: state.staff[sid].name, shifts: shifts, off: off };
+  }
+  /* ---------- publish schedules to the staff app (Firebase Firestore over REST) ---------- */
+  var PID_OK = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+  var fbTok = { id: '', exp: 0 }, fbRun = { timer: null, running: false, again: false, force: false };
+  function fbCfg() { return getSettings().fb || {}; }
+  function fbSet(patch) { var f = fbCfg(); Object.keys(patch).forEach(function (k) { f[k] = patch[k]; }); setSetting('fb', f); return f; }
+  function fbOn() { var f = fbCfg(); return !!(f.pid && f.key && f.refresh); }
+  function fbCodeText(code) { var f = fbCfg(); return (f.pid ? f.pid + '.' : '') + code; }
+  function fbErr(code, msg) { var e = new Error(msg); e.code = code; return e; }
+
+  function fbFetch(url, opts) {
+    return fetch(url, opts).then(function (r) {
+      return r.text().then(function (t) {
+        var j = null; try { j = t ? JSON.parse(t) : {}; } catch (e) { j = {}; }
+        if (r.ok) return j;
+        var m = (j && j.error && (j.error.message || j.error.status)) || '';
+        var kind = r.status === 401 ? 'auth' : r.status === 403 ? 'rules' : r.status === 404 ? 'nodb' : r.status === 400 ? 'bad' : 'http';
+        var e = fbErr(kind, m); e.status = r.status; throw e;
+      });
+    }, function () { throw fbErr('net', 'No internet connection.'); });
+  }
+  function fbSignIn(key, email, pw) {
+    return fbFetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(key), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email, password: pw, returnSecureToken: true })
+    }).then(function (j) {
+      fbTok = { id: j.idToken, exp: Date.now() + (Number(j.expiresIn) || 3600) * 1000 };
+      return j.refreshToken;
+    });
+  }
+  function fbToken() {
+    if (fbTok.id && Date.now() < fbTok.exp - 60000) return Promise.resolve(fbTok.id);
+    var f = fbCfg(); if (!f.refresh || !f.key) return Promise.reject(fbErr('auth', 'Sign in again.'));
+    return fbFetch('https://securetoken.googleapis.com/v1/token?key=' + encodeURIComponent(f.key), {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(f.refresh)
+    }).then(function (j) {
+      fbTok = { id: j.id_token, exp: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
+      if (j.refresh_token && j.refresh_token !== f.refresh) fbSet({ refresh: j.refresh_token });
+      return fbTok.id;
+    }, function (e) { if (e.code === 'bad' || e.code === 'auth') { fbSet({ refresh: '' }); e.code = 'auth'; } throw e; });
+  }
+  function fbDocUrl(code) { return 'https://firestore.googleapis.com/v1/projects/' + encodeURIComponent(fbCfg().pid) + '/databases/(default)/documents/schedule/' + encodeURIComponent(code); }
+  function fbEnc(sch) {
+    return { fields: {
+      name: { stringValue: sch.name || '' },
+      upd: { stringValue: new Date().toISOString() },
+      shifts: { arrayValue: { values: sch.shifts.map(function (x) { return { mapValue: { fields: { d: { stringValue: x.d }, i: { stringValue: x.i }, o: { stringValue: x.o || '' } } } }; }) } },
+      off: { arrayValue: { values: sch.off.map(function (d) { return { stringValue: d }; }) } }
+    } };
+  }
+  function fbPut(code, sch) {
+    return fbToken().then(function (tok) {
+      return fbFetch(fbDocUrl(code), { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(fbEnc(sch)) });
+    });
+  }
+  function fbDel(code) {
+    return fbToken().then(function (tok) {
+      return fbFetch(fbDocUrl(code), { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + tok } });
+    });
+  }
+  function fbWhy(e) {
+    var m = String(e && e.message || '');
+    if (e.code === 'net') return 'No internet connection. It will retry next time.';
+    if (e.code === 'auth') return 'Sign-in expired. Enter your password and tap Connect again.';
+    if (e.code === 'rules') return 'Firebase refused the update. Check the Rules (step 5 of the setup).';
+    if (e.code === 'nodb') return 'Firebase could not find the database. Check the Project ID and that Firestore is created.';
+    return 'Could not publish' + (m ? ': ' + m : '.');
+  }
+  function fbStatusLine() {
+    var f = fbCfg();
+    if (!fbOn()) return f.err || '';
+    if (f.err) return f.err;
+    return f.last ? 'Published to your staff ' + new Date(f.last).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.' : 'Connected. Nothing published yet.';
+  }
+  function fbShowStatus(isErr) {
+    var el = document.getElementById('fb-status');
+    if (el) { el.textContent = fbStatusLine(); el.className = 'msg' + (isErr || fbCfg().err ? ' err' : ''); }
+  }
+
+  function scheduleSync() {
+    ensureCodesLocal();
+    if (!fbOn()) return;
+    clearTimeout(fbRun.timer); fbRun.timer = setTimeout(function () { runSync(false); }, 2500);
+  }
+  /* Publish what changed; remove codes that no longer belong to anyone. */
+  function runSync(force) {
+    if (!fbOn()) return Promise.resolve();
+    if (fbRun.running) { fbRun.again = true; fbRun.force = fbRun.force || !!force; return Promise.resolve(); }
+    fbRun.running = true;
+    var known = fbCfg().pub || {}, nextPub = JSON.parse(JSON.stringify(known)), want = {}, ops = [];
+    Object.keys(state.staff).forEach(function (sid) { var c = state.staff[sid].code; if (c && !want[c]) want[c] = buildSchedule(sid); });
+    Object.keys(want).forEach(function (c) {
+      var str = canon(want[c]);
+      if (force || known[c] !== str) ops.push(function () { return fbPut(c, want[c]).then(function () { nextPub[c] = str; }); });
+    });
+    Object.keys(known).forEach(function (c) { if (!want[c]) ops.push(function () { return fbDel(c).then(function () { delete nextPub[c]; }, function (e) { if (e.status === 404) { delete nextPub[c]; } else throw e; }); }); });
+    var done = ops.reduce(function (p, f) { return p.then(f); }, Promise.resolve());
+    return done.then(function () {
+      var patch = { pub: nextPub, err: '' }; if (ops.length) patch.last = Date.now(); fbSet(patch);
+    }, function (e) {
+      fbSet({ pub: nextPub, err: fbWhy(e) });
+    }).then(function () {
+      fbRun.running = false; fbShowStatus();
+      if (fbRun.again) { var f2 = fbRun.force; fbRun.again = false; fbRun.force = false; return runSync(f2); }
+    });
+  }
+
+  /* ---------- staff tab pieces ---------- */
+  function codeRow(s, id) {
+    var confirm = ui.codeNew === id;
+    return '<div class="coderow"><div><span class="cl">Code for ' + esc(s.name) + '</span><strong class="num cv">' + esc(fbCodeText(s.code || '')) + '</strong></div>' +
+      '<div class="cbtns"><button class="btn" data-act="code-send">Send code</button>' +
+      '<button class="btn' + (confirm ? ' danger' : '') + '" data-act="code-new">' + (confirm ? 'Tap again: old code stops' : 'New code') + '</button></div></div>';
+  }
+  function publishHTML() {
+    var f = fbCfg(), on = fbOn(), d = ui.fbDraft || {};
+    var h = '<section class="card"><h2 class="sec-title">Staff app</h2><div class="addform">';
+    if (on) {
+      h += '<p><strong>Connected</strong> as ' + esc(f.email || '') + '<br><span class="hint">Project ' + esc(f.pid) + '</span></p>' +
+        '<label class="field"><span>Staff app link (where you put the staff app)</span><input type="text" inputmode="url" data-f="fb-url" placeholder="https://…" value="' + esc(f.url || '') + '"></label>' +
+        '<p id="fb-status" class="msg' + (f.err ? ' err' : '') + '" role="status">' + esc(fbStatusLine()) + '</p>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1" data-act="fb-publish">Publish now</button><button class="btn" style="flex:1" data-act="fb-off">Disconnect</button></div>' +
+        '<p class="hint">Schedules publish by themselves a few seconds after you change anything. Staff see names, days and times only, never pay, rate, bank or cash.</p>';
+    } else {
+      h += '<p class="hint">Employees install a separate app, type their code and see only their own times. Connect your free Firebase project once, then every schedule you save is published automatically.</p>' +
+        '<label class="field"><span>Firebase Project ID</span><input type="text" data-f="fb-pid" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="my-restaurant-1a2b3" value="' + esc(f.pid || '') + '"></label>' +
+        '<label class="field"><span>Web API key</span><input type="text" data-f="fb-key" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="AIza…" value="' + esc(f.key || '') + '"></label>' +
+        '<label class="field"><span>Your Firebase login email</span><input type="email" data-f="fb-email" inputmode="email" autocapitalize="off" value="' + esc(f.email || '') + '"></label>' +
+        '<label class="field"><span>Your Firebase login password</span><input type="password" id="fb-pw" data-f="fb-pw" autocomplete="current-password" value="' + esc(d.pw || '') + '"></label>' +
+        '<label class="field"><span>Staff app link (optional, used in the message you send)</span><input type="text" inputmode="url" data-f="fb-url" placeholder="https://…" value="' + esc(f.url || '') + '"></label>' +
+        '<button class="btn primary" data-act="fb-connect"' + (ui.fbBusy ? ' disabled' : '') + '>' + (ui.fbBusy ? 'Connecting…' : 'Connect') + '</button>' +
+        '<p id="fb-status" class="msg' + (ui.fbErr || f.err ? ' err' : '') + '" role="status">' + esc(ui.fbMsg || f.err || '') + '</p>' +
+        '<p class="hint">The password is used once to sign in and is not stored on this phone.</p>';
+    }
+    return h + '</div></section>';
+  }
+  function shareText(sid) {
+    var s = state.staff[sid], f = fbCfg();
+    return 'Hi ' + s.name + ',\n' + (f.url ? 'Install the My Shifts app: ' + f.url + '\n(iPhone: Share, then Add to Home Screen. Android: menu, then Install app.)\n' : '') +
+      'Open it and enter this code once:\n' + fbCodeText(s.code);
+  }
+  function fbAct(act, b) {
+    if (act === 'code-send') {
+      var sid = cardSid(b), s = state.staff[sid]; if (!s) return;
+      if (!fbCfg().pid) { toast('Connect the staff app first (bottom of this page).'); return; }
+      var text = shareText(sid);
+      if (navigator.share) { navigator.share({ text: text }).catch(function () {}); return; }
+      try { navigator.clipboard.writeText(text).then(function () { toast('Message copied. Paste it into WhatsApp.'); }, function () { toast(text); }); } catch (e) { toast(text); }
+    } else if (act === 'code-new') {
+      var sid2 = cardSid(b); if (!state.staff[sid2]) return;
+      if (ui.codeNew !== sid2) { ui.codeNew = sid2; render(); return; }
+      ui.codeNew = null; state.staff[sid2].code = genCode(); queueSave('staff', sid2, 0); render(); toast('New code made. Send it to ' + state.staff[sid2].name + '.');
+    } else if (act === 'fb-publish') {
+      var el = document.getElementById('fb-status'); if (el) { el.textContent = 'Publishing…'; el.className = 'msg'; }
+      runSync(true).then(function () { fbShowStatus(); });
+    } else if (act === 'fb-off') {
+      fbTok = { id: '', exp: 0 }; fbSet({ refresh: '', err: '' }); ui.fbMsg = ''; ui.fbErr = false; render();
+    } else if (act === 'fb-connect') {
+      var f = fbCfg(), d = ui.fbDraft || {}, pw = (document.getElementById('fb-pw') || {}).value || d.pw || '';
+      var pid = (f.pid || '').trim().toLowerCase(), key = (f.key || '').trim(), email = (f.email || '').trim();
+      var bad = !PID_OK.test(pid) ? 'The Project ID looks wrong. It is lowercase letters, numbers and dashes.' : !key ? 'Enter the Web API key.' : !/^\S+@\S+\.\S+$/.test(email) ? 'Enter the email of your Firebase login.' : !pw ? 'Enter your password.' : '';
+      if (bad) { ui.fbMsg = bad; ui.fbErr = true; render(); return; }
+      fbSet({ pid: pid, key: key, email: email });
+      ui.fbBusy = true; ui.fbMsg = ''; ui.fbErr = false; render();
+      fbSignIn(key, email, pw).then(function (rt) {
+        fbSet({ refresh: rt, pub: {}, err: '' }); ui.fbDraft = {}; ui.fbBusy = false; ui.fbMsg = ''; render();
+        var el2 = document.getElementById('fb-status'); if (el2) el2.textContent = 'Publishing…';
+        return runSync(true).then(function () { fbShowStatus(); });
+      }, function (e) {
+        ui.fbBusy = false; ui.fbErr = true;
+        ui.fbMsg = e.code === 'net' ? 'No internet connection.' : /API_KEY/i.test(e.message) ? 'The Web API key is not right.' : /EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_LOGIN|USER_DISABLED/i.test(e.message) ? 'Wrong email or password. Use the user you created in Firebase (step 4).' : /OPERATION_NOT_ALLOWED|CONFIGURATION/i.test(e.message) ? 'Email/Password sign-in is not turned on in Firebase (step 4).' : 'Could not sign in' + (e.message ? ': ' + e.message : '.');
+        render();
+      });
+    }
+  }
+  function fbInput(f, t) {
+    if (f === 'fb-pw') { ui.fbDraft = ui.fbDraft || {}; ui.fbDraft.pw = t.value; return true; }
+    var map = { 'fb-pid': 'pid', 'fb-key': 'key', 'fb-email': 'email', 'fb-url': 'url' };
+    if (!map[f]) return false;
+    var v = t.value.trim(); if (f === 'fb-pid') v = v.toLowerCase();
+    var o = {}; o[map[f]] = v; fbSet(o); return true;
+  }
+
+  function svClose() { if (sv.unsub) { sv.unsub(); sv.unsub = null; } }
+  function svReset() { svClose(); sv.state = 'idle'; sv.data = null; sv.code = ''; sv.msg = ''; }
+  function svOpen(code) {
+    svClose(); sv.code = code; sv.data = null; sv.state = 'loading'; sv.msg = ''; render();
+    try {
+      sv.unsub = DB.doc('schedule/' + code).onSnapshot(function (snap) {
+        if (snap.exists) { sv.data = snap.data(); sv.state = 'ok'; }
+        else { sv.data = null; sv.state = 'notfound'; try { localStorage.removeItem(SVKEY); } catch (e) {} }
+        render();
+      }, function () { sv.state = 'error'; render(); });
+    } catch (e) { sv.state = 'notfound'; render(); }
+  }
+  function svNext(d) {
+    var now = Date.now(), best = null;
+    (d.shifts || []).forEach(function (x) {
+      if (!x.o || !x.i) return;
+      var st = new Date(x.d + 'T' + x.i + ':00'), dur = toMin(x.o) - toMin(x.i);
+      if (isNaN(st.getTime()) || isNaN(dur)) return;
+      if (dur <= 0) dur += 1440;
+      if (st.getTime() + dur * 60000 <= now) return;
+      if (!best || st.getTime() < best.st.getTime()) best = { s: x, st: st, live: st.getTime() <= now };
+    });
+    return best;
+  }
+  function svTimes(x) { return x.i + ' – ' + (x.o || '…'); }
+  function staffViewHTML() {
+    var h = '';
+    if (ui.preview) h += '<section class="card nudge"><div><strong>Preview</strong><p class="hint">This is what your staff see. Enter one of their codes.</p></div><button class="btn" data-act="sv-exit">Back to admin</button></section>';
+    if (sv.state !== 'ok') {
+      var bad = sv.state === 'notfound' || sv.state === 'error';
+      var msg = sv.state === 'loading' ? 'Looking for your times…' : sv.state === 'notfound' ? 'That code was not found. Check it with your manager.' : sv.state === 'error' ? 'Could not load your times. Try again in a moment.' : sv.msg;
+      return h + '<form class="card addform" id="sv-form" autocomplete="off"><h2 class="sec-title">Your work times</h2>' +
+        '<label class="field"><span>Enter your code</span><input type="text" id="sv-code" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" value="' + esc(sv.code) + '"></label>' +
+        '<button class="btn primary" type="submit">Show my times</button><p class="msg' + (bad ? ' err' : '') + '" role="status">' + esc(msg || '') + '</p></form>';
+    }
+    var d = sv.data, today = todayISO(), wk = ui.svWeek, minWk = mondayOf(addDays(today, -14)), maxWk = addDays(mondayOf(today), 56), nx = svNext(d);
+    h += '<section class="card"><h2 class="sec-title">Hi ' + esc(d.name) + '</h2>' + (nx ?
+      '<div class="svnext"><b>' + (nx.live ? 'Working now' : 'Next shift') + '</b><span class="big">' + esc(svTimes(nx.s)) + '</span><span class="when">' + esc(fDay.format(nx.st) + ' ' + fShort.format(nx.st)) + '</span></div>' :
+      '<p class="hint">No upcoming shifts recorded yet.</p>') + '</section>';
+    h += '<section class="card"><div class="weeknav"><button class="icon" data-act="sv-prev" aria-label="Previous week"' + (wk <= minWk ? ' disabled' : '') + '>' + ICON.left + '</button>' +
+      '<div class="weeklabel"><strong>' + esc(fShort.format(parse(wk)) + ' – ' + fShort.format(parse(addDays(wk, 6)))) + '</strong><span>' + (wk === mondayOf(today) ? 'This week' : 'Monday to Sunday') + '</span></div>' +
+      '<button class="icon" data-act="sv-next" aria-label="Next week"' + (wk >= maxWk ? ' disabled' : '') + '>' + ICON.right + '</button></div><ul class="svdays" style="margin-top:8px">';
+    for (var i = 0; i < 7; i++) {
+      var ds = addDays(wk, i), dt = parse(ds);
+      var list = (d.shifts || []).filter(function (x) { return x.d === ds; });
+      var body = list.length ? list.map(function (x) { return '<span class="svtime">' + esc(svTimes(x)) + '</span>'; }).join('') :
+        ((d.off || []).indexOf(ds) > -1 ? '<span class="svoff">Day off</span>' : '<span class="svnone">Not scheduled</span>');
+      h += '<li class="svday' + (ds === today ? ' today' : '') + '"><div class="svd"><b>' + fDay.format(dt) + '</b><span>' + fShort.format(dt) + '</span></div><div class="svt">' + body + '</div></li>';
+    }
+    h += '</ul></section><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" data-act="sv-this">This week</button><button class="btn" data-act="sv-switch">Not you? Change code</button></div>' +
+      '<p class="hint">These are the times your manager recorded. Ask your manager if something looks wrong.</p>';
+    return h;
+  }
+  function staffAccessHTML() {
+    return '<section class="card"><h2 class="sec-title">What staff see</h2><p class="hint">Each employee has a code above. They open this program with their own Claude account, enter their code and see only their own times: no pay, rates, bank or cash. Share the program with them as a viewer.</p>' +
+      '<button class="btn" style="margin-top:10px" data-act="sv-preview">Preview the staff view</button></section>';
+  }
+  function codeField(sv0) {
+    return '<label class="field"><span>Staff code (they enter it to see their times)</span><input class="num" type="text" inputmode="numeric" maxlength="8" data-f="st-code" value="' + esc(sv0.code || '') + '"></label>' +
+      '<p class="warn" data-m="code" hidden style="grid-column:1 / -1;margin:0"></p>';
+  }
+  document.addEventListener('submit', function (e) {
+    if (!e.target || e.target.id !== 'sv-form') return;
+    e.preventDefault();
+    var c = (document.getElementById('sv-code').value || '').trim();
+    if (!/^\d{4,8}$/.test(c)) { sv.code = c; sv.state = 'idle'; sv.msg = 'A code is 4 to 8 digits.'; render(); return; }
+    if (!ui.preview) { try { localStorage.setItem(SVKEY, c); } catch (err) {} }
+    svOpen(c);
+  });
+  function queueSave(kind, id, delay) {
+    var k = kind + '/' + id;
+    var p = pending[k] || (pending[k] = { timer: null, ver: 0 });
+    p.ver++; clearTimeout(p.timer); setStatus('saving');
+    p.timer = setTimeout(function () { flush(kind, id); }, delay || 0);
+    scheduleSync();
+  }
+  function flush(kind, id) {
+    var k = kind + '/' + id, p = pending[k];
+    if (!p) return Promise.resolve();
+    clearTimeout(p.timer);
+    var v = p.ver, data = state[kind][id];
+    var run = function () {
+      var op;
+      if (DB) {
+        var ref = DB.doc(kind + '/' + id);
+        op = data === undefined ? ref.delete() : ref.set(clone(data));
+      } else {
+        op = localSave() ? Promise.resolve() : Promise.reject(new Error('storage'));
+      }
+      return op.then(function () { setStatus(DB ? 'saved' : 'local'); }, function () { setStatus('error'); });
+    };
+    var next = (chains[k] || Promise.resolve()).then(run);
+    chains[k] = next;
+    return next.then(function () { if (pending[k] && pending[k].ver === v) delete pending[k]; });
+  }
+  function flushAll() { Object.keys(pending).forEach(function (k) { var i = k.indexOf('/'); flush(k.slice(0, i), k.slice(i + 1)); }); }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flushAll(); });
+  window.addEventListener('pagehide', flushAll);
+
+  function merge(kind, incoming) {
+    var out = {};
+    Object.keys(incoming).forEach(function (id) { if (!pending[kind + '/' + id]) out[id] = incoming[id]; });
+    Object.keys(pending).forEach(function (k) {
+      var i = k.indexOf('/'); if (k.slice(0, i) !== kind) return;
+      var id = k.slice(i + 1); if (state[kind][id] !== undefined) out[id] = state[kind][id];
+    });
+    state[kind] = out;
+  }
+  function subscribe() {
+    loadTimer = setTimeout(function () { if (!(loaded.staff && loaded.weeks)) { ui.slow = true; render(); } }, 10000);
+    ['staff', 'weeks'].forEach(function (kind) {
+      DB.collection(kind).onSnapshot(function (snap) {
+        var m = {}; snap.docs.forEach(function (d) { m[d.id] = clone(d.data()); });
+        merge(kind, m); loaded[kind] = true; afterData();
+      }, function () { ui.loadError = true; setStatus('error'); render(); });
+    });
+  }
+  function ready() { return mode === 'local' || (loaded.staff && loaded.weeks); }
+  function editing() { var a = document.activeElement; return a && app.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName); }
+  function afterData() {
+    if (!ready()) return;
+    clearTimeout(loadTimer); ui.slow = false; ensureCodes(); scheduleSync();
+    if (editing()) { if (ui.tab === 'week') refreshNumbers(); else if (ui.tab === 'today') refreshDay(); } else render();
+  }
+
+  /* ---------- domain ---------- */
+  function sortedStaff() {
+    return Object.keys(state.staff).map(function (id) { return [id, state.staff[id]]; }).sort(function (a, b) {
+      return (num(a[1].order) - num(b[1].order)) || String(a[1].name).localeCompare(String(b[1].name));
+    });
+  }
+  function defaultCfg(wid) {
+    var best = null;
+    Object.keys(state.weeks).forEach(function (id) { if (id < wid && state.weeks[id].cfg && (!best || id > best)) best = id; });
+    return clone(best ? state.weeks[best].cfg : DEF_CFG);
+  }
+  function cfgOf(wid) { var w = state.weeks[wid]; return w && w.cfg ? w.cfg : defaultCfg(wid); }
+  function ensureWeek(wid) {
+    var w = state.weeks[wid];
+    if (!w) { w = { cfg: defaultCfg(wid), snap: {}, shifts: [], cash: {} }; state.weeks[wid] = w; }
+    w.cfg = w.cfg || defaultCfg(wid); w.snap = w.snap || {}; w.shifts = w.shifts || []; w.cash = w.cash || {}; w.off = w.off || {};
+    Object.keys(state.staff).forEach(function (sid) {
+      if (!w.snap[sid]) { var s = state.staff[sid]; w.snap[sid] = { name: s.name, position: s.position || '', rate: num(s.rate), bank: num(s.bank) }; }
+    });
+    return w;
+  }
+  function shiftMin(s, cfg) {
+    var a = toMin(s.in), b = toMin(s.out);
+    if (isNaN(a) || isNaN(b)) return 0;
+    var d = b - a; if (d < 0) d += 1440;
+    return Math.max(0, d - Math.round(num(cfg.lunch) * 60));
+  }
+  function nameOf(wid, sid) {
+    var w = state.weeks[wid] || {}, live = state.staff[sid], sn = (w.snap || {})[sid];
+    return live ? live.name : (sn && sn.name) || 'Former employee';
+  }
+  function rowsFor(wid) {
+    var w = state.weeks[wid] || { shifts: [], snap: {}, cash: {} }, cfg = cfgOf(wid);
+    var shifts = w.shifts || [], snap = w.snap || {}, cash = w.cash || {}, off = w.off || {};
+    var ids = [], seen = {};
+    sortedStaff().forEach(function (e) { ids.push(e[0]); seen[e[0]] = 1; });
+    var used = {};
+    shifts.forEach(function (s) { used[s.sid] = 1; });
+    Object.keys(cash).forEach(function (sid) { if (num(cash[sid])) used[sid] = 1; });
+    Object.keys(used).forEach(function (sid) { if (!seen[sid]) { ids.push(sid); seen[sid] = 1; } });
+    var otAfterMin = Math.round(num(cfg.otAfter) * 60);
+    return ids.map(function (sid) {
+      var live = state.staff[sid], sn = snap[sid];
+      var rate = sn && typeof sn.rate === 'number' ? sn.rate : (live ? num(live.rate) : 0);
+      var mins = 0;
+      shifts.forEach(function (s) { if (s.sid === sid) mins += shiftMin(s, cfg); });
+      var regMin = otAfterMin > 0 ? Math.min(mins, otAfterMin) : mins;
+      var otMin = otAfterMin > 0 ? Math.max(0, mins - otAfterMin) : 0;
+      var regPay = round2(regMin / 60 * rate);
+      var otPay = round2(otMin / 60 * rate * (1 + num(cfg.otPremium) / 100));
+      var total = round2(regPay + otPay);
+      /* Bank is the fixed amount; cash is what is left. Weeks saved earlier with a cash amount keep that cash. */
+      var bank = sn && typeof sn.bank === 'number' ? sn.bank : (cash[sid] !== undefined ? round2(total - num(cash[sid])) : (live ? num(live.bank) : 0));
+      return {
+        sid: sid, name: live ? live.name : (sn && sn.name) || 'Former employee',
+        position: live ? (live.position || '') : (sn && sn.position) || '',
+        offDays: Object.keys(off).filter(function (d) { return off[d].indexOf(sid) > -1; }).sort(),
+        rate: rate, mins: mins, otMin: otMin, regPay: regPay, otPay: otPay, total: total, bank: round2(bank), cash: round2(total - bank)
+      };
+    });
+  }
+  function totalsOf(rows) {
+    var t = { mins: 0, total: 0, cash: 0, bank: 0 };
+    rows.forEach(function (r) { t.mins += r.mins; t.total += r.total; t.cash += r.cash; t.bank += r.bank; });
+    t.total = round2(t.total); t.cash = round2(t.cash); t.bank = round2(t.bank);
+    return t;
+  }
+
+  /* ---------- views ---------- */
+  function updateTabs() {
+    ['today', 'week', 'staff', 'month', 'backup'].forEach(function (t) {
+      document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
+    });
+  }
+  function render() {
+    var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
+    if (tabsEl) tabsEl.hidden = sview || !roleKnown;
+    if (sview) { app.innerHTML = staffViewHTML(); return; }
+    updateTabs();
+    if (ui.loadError) { app.innerHTML = '<div class="card empty"><strong>Saved data can’t be opened</strong><p>Reload the page. If it keeps happening, check that you are signed in.</p></div>'; return; }
+    if (!ready()) {
+      app.innerHTML = '<p class="muted">Loading your staff and weeks…</p>' + (ui.slow ? '<p class="hint">This is taking longer than usual. Saved data may not be reachable yet.</p>' : '');
+      return;
+    }
+    app.innerHTML = ui.tab === 'today' ? dayHTML() : ui.tab === 'week' ? weekHTML() : ui.tab === 'staff' ? staffHTML() : ui.tab === 'backup' ? backupHTML() : monthHTML();
+  }
+
+  function weekHTML() {
+    var wid = ui.wid, end = addDays(wid, 6), rows = rowsFor(wid), cfg = cfgOf(wid), T = totalsOf(rows);
+    var w = state.weeks[wid] || { shifts: [] };
+    var isThis = wid === mondayOf(todayISO()), staff = sortedStaff();
+    var label = fShort.format(parse(wid)) + ' – ' + fShort.format(parse(end)) + ' ' + parse(end).getFullYear();
+
+    var h = '<section class="card"><div class="weeknav">' +
+      '<button class="icon" data-act="prev" aria-label="Previous week">' + ICON.left + '</button>' +
+      '<div class="weeklabel"><strong>' + esc(label) + '</strong><span>' + (isThis ? 'This week' : 'Monday to Sunday') + '</span></div>' +
+      '<button class="icon" data-act="next" aria-label="Next week">' + ICON.right + '</button></div>' +
+      '<div class="navtools"><label class="field"><span>Jump to a date</span><input type="date" id="jump" data-f="jump" value="' + wid + '"></label>' +
+      '<button class="btn" data-act="today"' + (isThis ? ' disabled' : '') + '>This week</button></div></section>';
+
+    h += '<section class="tiles" aria-label="Week totals">' +
+      '<div class="tile"><span>Total hours</span><b data-t="mins">' + fmtHM(T.mins) + '</b></div>' +
+      '<div class="tile main"><span>Total pay</span><b data-t="total">' + eur(T.total) + '</b></div>' +
+      '<div class="tile"><span>Cash</span><b data-t="cash">' + eur(T.cash) + '</b></div>' +
+      '<div class="tile"><span>Bank</span><b data-t="bank">' + eur(T.bank) + '</b></div></section>';
+
+    if (!staff.length && !rows.length) {
+      h += '<div class="card empty"><strong>No staff yet</strong><p>Add your employees and their hourly rates first. Then come back to record the week.</p><button class="btn primary" data-act="tab" data-tab="staff">Add staff</button></div>';
+      return h;
+    }
+
+    h += timetableHTML(wid, rows);
+    h += '<section><h2 class="sec-title">Pay this week</h2><div style="display:grid;gap:12px">' + rows.map(payCard).join('') + '</div></section>';
+
+    /* sign in */
+    var first = staff.length ? staff[0][0] : '';
+    if (!state.staff[ui.form.sid]) ui.form.sid = first;
+    var chips = '';
+    for (var i = 0; i < 7; i++) {
+      var d = parse(addDays(wid, i));
+      chips += '<button type="button" class="chip" data-act="chip" data-i="' + i + '" aria-pressed="' + (ui.form.days.indexOf(i) > -1) + '" aria-label="' + esc(fLong.format(d)) + '"><span>' + fDay.format(d) + '</span><b>' + d.getDate() + '</b></button>';
+    }
+    h += '<section class="card"><h2 class="sec-title">Sign in</h2>' + (staff.length ? '<div class="addform">' +
+      '<label class="field"><span>Employee</span><select id="f-sid" data-f="f-sid">' + staff.map(function (e) { return '<option value="' + esc(e[0]) + '"' + (e[0] === ui.form.sid ? ' selected' : '') + '>' + esc(e[1].name) + '</option>'; }).join('') + '</select></label>' +
+      '<div class="field"><span>Days worked (pick one or more)</span><div class="chips">' + chips + '</div></div>' +
+      '<div class="row2"><label class="field"><span>In</span><input type="time" id="f-in" data-f="f-in" value="' + esc(ui.form.inT) + '"></label>' +
+      '<label class="field"><span>Out</span><input type="time" id="f-out" data-f="f-out" value="' + esc(ui.form.outT) + '"></label></div>' +
+      '<button class="btn primary" data-act="add-shift">Add shift</button><p class="msg' + (ui.msgErr ? ' err' : '') + '" role="status">' + esc(ui.msg) + '</p></div>' : '<p class="hint">Add staff first.</p>') + '</section>';
+
+    var shifts = (w.shifts || []).slice().sort(function (a, b) {
+      return a.date.localeCompare(b.date) || nameOf(wid, a.sid).localeCompare(nameOf(wid, b.sid)) || String(a.in).localeCompare(String(b.in));
+    });
+    h += '<section class="card"><h2 class="sec-title">Shifts this week</h2>' + (shifts.length ? '<ul class="shifts">' + shifts.map(function (s) {
+      return '<li class="shift" data-id="' + esc(s.id) + '"><div class="who">' + esc(nameOf(wid, s.sid)) + '</div>' +
+        '<button class="icon danger del" data-act="del-shift" aria-label="Remove this shift">' + ICON.trash + '</button>' +
+        '<div class="times"><input type="date" data-f="s-date" min="' + wid + '" max="' + end + '" value="' + esc(s.date) + '" aria-label="Date">' +
+        '<input type="time" data-f="s-in" value="' + esc(s.in) + '" aria-label="In">' +
+        '<input type="time" data-f="s-out" value="' + esc(s.out) + '" aria-label="Out">' +
+        '<span class="hrs num" data-h="' + esc(s.id) + '">' + fmtHM(shiftMin(s, cfg)) + '</span></div></li>';
+    }).join('') + '</ul>' : '<p class="hint">No shifts recorded for this week yet. Choose an employee and the days above, then press Add shift.</p>') + '</section>';
+
+    h += '<details class="card rules"><summary>Week rules: lunch and overtime</summary><div class="grid3">' +
+      '<label class="field"><span>Lunch break (hours per shift)</span><input class="num" type="number" inputmode="decimal" step="0.25" min="0" data-f="cfg-lunch" value="' + num(cfg.lunch) + '"></label>' +
+      '<label class="field"><span>Overtime after (hours per week)</span><input class="num" type="number" inputmode="decimal" step="0.5" min="0" data-f="cfg-otAfter" value="' + num(cfg.otAfter) + '"></label>' +
+      '<label class="field"><span>Overtime extra pay (%)</span><input class="num" type="number" inputmode="decimal" step="5" min="0" data-f="cfg-otPremium" value="' + num(cfg.otPremium) + '"></label></div>' +
+      '<p class="hint" style="margin-top:10px">Lunch is taken off every shift. Overtime 0 hours means no overtime. These rules belong to this week; the next new week starts with the same values.</p></details>';
+    return h;
+  }
+
+  function payCard(r) {
+    return '<article class="card pay' + (r.cash < 0 ? ' over' : '') + '" data-sid="' + esc(r.sid) + '">' +
+      '<div class="pay-head"><div><h3>' + esc(r.name) + '</h3><p>' + esc(r.position || ' ') + '</p><p class="warn" data-o="norate"' + (r.rate === 0 && r.mins > 0 ? '' : ' hidden') + '>No hourly rate set</p></div>' +
+      '<label class="field rate"><span>€ per hour</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="rate" value="' + r.rate.toFixed(2) + '"></label></div>' +
+      '<dl class="stats">' +
+      '<div><dt>Hours</dt><dd><span data-o="hours">' + fmtHM(r.mins) + '</span><small data-o="ot">' + (r.otMin ? fmtHM(r.otMin) + ' overtime' : '') + '</small></dd></div>' +
+      '<div><dt>Regular pay</dt><dd data-o="reg">' + eur(r.regPay) + '</dd></div>' +
+      '<div><dt>Overtime pay</dt><dd data-o="otpay">' + eur(r.otPay) + '</dd></div>' +
+      '<div class="total"><dt>Total</dt><dd data-o="total">' + eur(r.total) + '</dd></div></dl>' +
+      (r.offDays.length ? '<p class="hint">Days off: ' + r.offDays.map(function (d) { return esc(fDay.format(parse(d)) + ' ' + parse(d).getDate()); }).join(', ') + '</p>' : '') +
+      '<div class="split"><label class="field"><span>Bank (€)</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="bank" placeholder="0.00" value="' + (r.bank ? r.bank : '') + '"></label>' +
+      '<div class="bank"><span>Cash (the rest)</span><strong data-o="cash">' + eur(r.cash) + '</strong></div>' +
+      '<p class="overnote" data-o="over"' + (r.cash < 0 ? '' : ' hidden') + '>Bank is more than the total pay, so cash is below zero.</p></div></article>';
+  }
+
+  function staffHTML() {
+    var staff = sortedStaff();
+    var h = '<p class="hint">Bank amount is the fixed part paid to the bank each week. Cash is whatever is left of the pay. Rate and bank changes apply to weeks you have not recorded yet. Past weeks keep what they were paid at. To fix a recorded week, change it on that week’s pay card.</p>';
+    if (!staff.length) h += '<div class="card empty"><strong>No staff yet</strong><p>Add your first employee below.</p></div>';
+    h += staff.map(function (e) {
+      var id = e[0], s = e[1];
+      return '<article class="card staffrow" data-sid="' + esc(id) + '"><div class="fields">' +
+        '<label class="field"><span>Name</span><input type="text" data-f="st-name" value="' + esc(s.name) + '" autocomplete="off"></label>' +
+        '<label class="field"><span>Position</span><input type="text" data-f="st-position" value="' + esc(s.position || '') + '" autocomplete="off"></label>' +
+        '<label class="field"><span>€ per hour</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="st-rate" value="' + num(s.rate).toFixed(2) + '"></label>' +
+        '<label class="field"><span>Bank amount per week (€)</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="st-bank" placeholder="0.00" value="' + (num(s.bank) ? num(s.bank) : '') + '"></label>' + codeRow(s, id) + '</div>' +
+        '<div class="foot">' + (ui.confirmRm === id ?
+          '<div class="confirm"><span>Remove ' + esc(s.name) + '? Past weeks keep their records.</span><button class="btn danger" data-act="rm-confirm">Remove</button><button class="btn" data-act="rm-cancel">Keep</button></div>' :
+          '<button class="btn danger" data-act="rm-staff">Remove employee</button>') + '</div></article>';
+    }).join('');
+    h += '<section class="card"><h2 class="sec-title">Add an employee</h2><div class="addform">' +
+      '<label class="field"><span>Name</span><input type="text" id="ns-name" data-f="ns-name" value="' + esc(ui.newStaff.name) + '" autocomplete="off"></label>' +
+      '<div class="row2"><label class="field"><span>Position</span><input type="text" data-f="ns-position" value="' + esc(ui.newStaff.position) + '" autocomplete="off"></label>' +
+      '<label class="field"><span>€ per hour</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="ns-rate" value="' + esc(ui.newStaff.rate) + '" placeholder="0.00"></label></div>' +
+      '<label class="field"><span>Bank amount per week (€)</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="ns-bank" value="' + esc(ui.newStaff.bank) + '" placeholder="0.00"></label>' +
+      '<button class="btn primary" data-act="add-staff">Add employee</button><p class="msg err" role="status">' + esc(ui.staffMsg) + '</p></div></section>';
+    h += publishHTML();
+    return h;
+  }
+
+  /* ---------- weekly timetable ---------- */
+  function ttBody(wid, rows) {
+    var w = state.weeks[wid] || { shifts: [] }, cfg = cfgOf(wid), today = todayISO(), days = [];
+    for (var i = 0; i < 7; i++) days.push(addDays(wid, i));
+    var h = '<thead><tr><th scope="col">Employee</th>' + days.map(function (d) {
+      return '<th scope="col"' + (d === today ? ' class="today"' : '') + '>' + fDay.format(parse(d)) + '<br>' + parse(d).getDate() + '</th>';
+    }).join('') + '<th scope="col">Total</th></tr></thead><tbody>';
+    var dayMins = days.map(function () { return 0; }), all = 0;
+    rows.forEach(function (r) {
+      h += '<tr><th scope="row">' + esc(r.name) + '</th>';
+      days.forEach(function (d, i) {
+        var cls = d === today ? ' class="today"' : '';
+        var list = (w.shifts || []).filter(function (s) { return s.sid === r.sid && s.date === d; })
+          .sort(function (a, b) { return String(a.in).localeCompare(String(b.in)); });
+        if (!list.length) { h += '<td' + cls + '>' + (isOff(wid, r.sid, d) ? '<span class="off">Off</span>' : '<span class="none">–</span>') + '</td>'; return; }
+        var m = 0; list.forEach(function (s) { m += shiftMin(s, cfg); });
+        dayMins[i] += m;
+        h += '<td' + cls + '><b>' + fmtHM(m) + '</b>' + list.map(function (s) { return '<small>' + esc(s.in) + '–' + esc(s.out || '…') + '</small>'; }).join('') + '</td>';
+      });
+      h += '<td><b>' + fmtHM(r.mins) + '</b></td></tr>';
+      all += r.mins;
+    });
+    return h + '</tbody><tfoot><tr><th scope="row">All</th>' + dayMins.map(function (m) { return '<td>' + (m ? fmtHM(m) : '–') + '</td>'; }).join('') + '<td>' + fmtHM(all) + '</td></tr></tfoot>';
+  }
+  function timetableHTML(wid, rows) {
+    return '<section class="card"><h2 class="sec-title">Timetable</h2><div class="tt-wrap"><table class="tt" id="tt">' + ttBody(wid, rows) + '</table></div>' +
+      '<p class="hint" style="margin-top:8px">Hours worked each day with in and out times. Scroll sideways to see the whole week.</p></section>';
+  }
+
+  /* ---------- monthly report ---------- */
+  function addMonths(ym, n) { var p = ym.split('-').map(Number), d = new Date(p[0], p[1] - 1 + n, 1); return d.getFullYear() + '-' + pad(d.getMonth() + 1); }
+  function monthStats(ym) {
+    var by = {};
+    var get = function (sid, wid) {
+      if (!by[sid]) {
+        var live = state.staff[sid], sn = ((state.weeks[wid] || {}).snap || {})[sid] || {};
+        by[sid] = { sid: sid, name: live ? live.name : (sn.name || 'Former employee'), position: live ? (live.position || '') : (sn.position || ''), mins: 0, days: {}, off: {}, total: 0, bank: 0 };
+      }
+      return by[sid];
+    };
+    Object.keys(state.weeks).sort().forEach(function (wid) {
+      var w = state.weeks[wid], cfg = cfgOf(wid), shifts = w.shifts || [];
+      rowsFor(wid).forEach(function (r) {
+        if (!r.mins) return;
+        shifts.forEach(function (s) {
+          if (s.sid !== r.sid || String(s.date).slice(0, 7) !== ym) return;
+          var m = shiftMin(s, cfg); if (!m) return;
+          var o = get(r.sid, wid), share = m / r.mins;
+          o.mins += m; o.total += r.total * share; o.bank += r.bank * share; o.days[s.date] = 1;
+        });
+      });
+      Object.keys(w.off || {}).forEach(function (d) {
+        if (d.slice(0, 7) !== ym) return;
+        (w.off[d] || []).forEach(function (sid) { get(sid, wid).off[d] = 1; });
+      });
+    });
+    var order = {}; sortedStaff().forEach(function (e, i) { order[e[0]] = i; });
+    var list = Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) {
+      var oa = order[a.sid] === undefined ? 1e6 : order[a.sid], ob = order[b.sid] === undefined ? 1e6 : order[b.sid];
+      return (oa - ob) || a.name.localeCompare(b.name);
+    });
+    var T = { mins: 0, total: 0, bank: 0, cash: 0 };
+    list.forEach(function (o) {
+      o.total = round2(o.total); o.bank = round2(o.bank); o.cash = round2(o.total - o.bank);
+      o.daysN = Object.keys(o.days).length;
+      o.offN = Object.keys(o.off).filter(function (d) { return !o.days[d]; }).length;
+      T.mins += o.mins; T.total += o.total; T.bank += o.bank;
+    });
+    T.total = round2(T.total); T.bank = round2(T.bank); T.cash = round2(T.total - T.bank);
+    return { list: list, T: T };
+  }
+  function weekCard(id) {
+    var T = totalsOf(rowsFor(id)), end = addDays(id, 6);
+    return '<button class="card hist" data-act="open-week" data-wid="' + id + '"><div class="hist-head"><strong>' + esc(fShort.format(parse(id)) + ' – ' + fShort.format(parse(end)) + ' ' + parse(end).getFullYear()) + '</strong><span class="hint">Open</span></div>' +
+      '<div class="hist-nums"><div><span>Hours</span><b>' + fmtHM(T.mins) + '</b></div><div><span>Total pay</span><b>' + eur(T.total) + '</b></div><div><span>Cash</span><b>' + eur(T.cash) + '</b></div><div><span>Bank</span><b>' + eur(T.bank) + '</b></div></div></button>';
+  }
+  function monthHTML() {
+    var ym = ui.month, st = monthStats(ym), T = st.T, first = ym + '-01', thisM = todayISO().slice(0, 7);
+    var last = addDays(addMonths(ym, 1) + '-01', -1), title = fMonth.format(parse(first));
+    var h = '<section class="card"><div class="weeknav">' +
+      '<button class="icon" data-act="m-prev" aria-label="Previous month">' + ICON.left + '</button>' +
+      '<div class="weeklabel"><strong>' + esc(title) + '</strong><span>' + (ym === thisM ? 'This month' : 'Monthly report') + '</span></div>' +
+      '<button class="icon" data-act="m-next" aria-label="Next month">' + ICON.right + '</button></div>' +
+      '<div class="navtools"><button class="btn" data-act="m-this"' + (ym === thisM ? ' disabled' : '') + '>This month</button></div></section>';
+    h += '<section class="tiles" aria-label="Month totals">' +
+      '<div class="tile"><span>Total hours</span><b>' + fmtHM(T.mins) + '</b></div>' +
+      '<div class="tile main"><span>Total pay</span><b>' + eur(T.total) + '</b></div>' +
+      '<div class="tile"><span>Bank</span><b>' + eur(T.bank) + '</b></div>' +
+      '<div class="tile"><span>Cash</span><b>' + eur(T.cash) + '</b></div></section>';
+    if (!st.list.length) {
+      h += '<div class="card empty"><strong>No hours in ' + esc(title) + '</strong><p>Hours you record on the Today and Week tabs show up here, month by month.</p><button class="btn primary" data-act="tab" data-tab="today">Record hours</button></div>';
+    } else {
+      h += '<section><h2 class="sec-title">By employee</h2><div style="display:grid;gap:12px">' + st.list.map(function (o) {
+        return '<article class="card"><div class="pay-head"><div><h3>' + esc(o.name) + '</h3><p>' + esc(o.position || ' ') + '</p></div></div>' +
+          '<dl class="mstats"><div><dt>Hours</dt><dd>' + fmtHM(o.mins) + '</dd></div><div><dt>Days worked</dt><dd>' + o.daysN + '</dd></div><div><dt>Days off</dt><dd>' + o.offN + '</dd></div>' +
+          '<div class="total"><dt>Total pay</dt><dd>' + eur(o.total) + '</dd></div><div><dt>Bank</dt><dd>' + eur(o.bank) + '</dd></div><div><dt>Cash</dt><dd>' + eur(o.cash) + '</dd></div></dl></article>';
+      }).join('') + '</div><p class="hint" style="margin-top:10px">Pay, bank and cash come from your weekly records. A week that falls in two months is split by the hours worked in each.</p></section>';
+    }
+    var wids = Object.keys(state.weeks).filter(function (id) {
+      return id <= last && addDays(id, 6) >= first && (state.weeks[id].shifts || []).length;
+    }).sort();
+    if (wids.length) h += '<section><h2 class="sec-title">Weeks in this month</h2><div style="display:grid;gap:12px">' + wids.map(weekCard).join('') + '</div></section>';
+    return h;
+  }
+
+  /* ---------- daily entry ---------- */
+  function dayWid() { return mondayOf(ui.day); }
+  function findShift(wid, sid, date) {
+    var w = state.weeks[wid]; if (!w || !w.shifts) return null;
+    return w.shifts.find(function (s) { return s.sid === sid && s.date === date; }) || null;
+  }
+  function usualFor(sid) {
+    var best = null;
+    Object.keys(state.weeks).forEach(function (id) {
+      (state.weeks[id].shifts || []).forEach(function (s) { if (s.sid === sid && s.in && s.out && (!best || s.date > best.date)) best = s; });
+    });
+    return best ? { inT: best.in, outT: best.out } : { inT: '08:00', outT: '17:00' };
+  }
+  function dayHrs(s, cfg, off) { return off ? 'Off' : s && s.in && s.out ? fmtHM(shiftMin(s, cfg)) : s && s.in ? '…' : '—'; }
+  function offList(w, date) { return (w && w.off && w.off[date]) || []; }
+  function isOff(wid, sid, date) { return offList(state.weeks[wid], date).indexOf(sid) > -1; }
+  function removeOffRaw(w, sid, date) {
+    var arr = offList(w, date), i = arr.indexOf(sid);
+    if (i < 0) return false;
+    arr.splice(i, 1); if (!arr.length) delete w.off[date];
+    return true;
+  }
+  function setOff(sid, on) {
+    var wid = dayWid(), date = ui.day;
+    if (on) {
+      var w = ensureWeek(wid), arr = w.off[date] || (w.off[date] = []);
+      if (arr.indexOf(sid) < 0) { arr.push(sid); queueSave('weeks', wid, 300); }
+    } else {
+      var w1 = state.weeks[wid];
+      if (w1 && removeOffRaw(w1, sid, date)) queueSave('weeks', wid, 300);
+    }
+  }
+  function markOff(sid) {
+    var wid = dayWid(), s, w = state.weeks[wid];
+    while ((s = findShift(wid, sid, ui.day))) w.shifts.splice(w.shifts.indexOf(s), 1);
+    setOff(sid, true); queueSave('weeks', wid, 300);
+  }
+  function setDayTimes(sid, inT, outT) {
+    var wid = dayWid(), date = ui.day, s = findShift(wid, sid, date);
+    if (!inT && !outT) {
+      if (s) { var w0 = state.weeks[wid]; w0.shifts.splice(w0.shifts.indexOf(s), 1); queueSave('weeks', wid, 300); }
+      setOff(sid, false);
+      return;
+    }
+    var w = ensureWeek(wid); s = findShift(wid, sid, date); setOff(sid, false);
+    if (!s) w.shifts.push({ id: uid('x'), sid: sid, date: date, in: inT, out: outT }); else { s.in = inT; s.out = outT; }
+    queueSave('weeks', wid, 300);
+  }
+  function dayRow(e, date, wid, cfg) {
+    var sid = e[0], st = e[1], w = state.weeks[wid] || { shifts: [] };
+    var list = (w.shifts || []).filter(function (x) { return x.sid === sid && x.date === date; });
+    var s = list[0] || null, u = usualFor(sid), off = isOff(wid, sid, date), dis = off ? ' disabled' : '';
+    return '<article class="card dayrow' + (off ? ' isoff' : '') + '" data-sid="' + esc(sid) + '">' +
+      '<div class="dr-head"><div><h3>' + esc(st.name) + '</h3><p>' + esc(st.position || ' ') + '</p></div><span class="hrs num" data-o="dhrs">' + dayHrs(s, cfg, off) + '</span></div>' +
+      '<div class="dr-times"><label class="field"><span>In</span><input type="time" data-f="d-in" value="' + esc(s ? s.in : '') + '"' + dis + '></label>' +
+      '<label class="field"><span>Out</span><input type="time" data-f="d-out" value="' + esc(s ? s.out : '') + '"' + dis + '></label></div>' +
+      '<div class="dr-actions"><button class="btn" data-act="d-usual">Use ' + esc(u.inT) + ' – ' + esc(u.outT) + '</button>' +
+      '<button class="btn" data-act="d-off">' + (off ? 'Undo day off' : 'Day off') + '</button>' +
+      '<button class="btn danger" data-act="d-clear"' + (s || off ? '' : ' disabled') + '>Clear</button></div>' +
+      (list.length > 1 ? '<p class="hint">+' + (list.length - 1) + ' more shift' + (list.length > 2 ? 's' : '') + ' on this day. Edit them in the Week tab.</p>' : '') + '</article>';
+  }
+  function dayHTML() {
+    var date = ui.day, wid = dayWid(), staff = sortedStaff(), cfg = cfgOf(wid), isToday = date === todayISO();
+    var h = nudgeHTML() + '<section class="card"><div class="weeknav">' +
+      '<button class="icon" data-act="d-prev" aria-label="Previous day">' + ICON.left + '</button>' +
+      '<div class="weeklabel"><strong>' + esc(fLong.format(parse(date))) + '</strong><span>' + (isToday ? 'Today' : parse(date).getFullYear()) + '</span></div>' +
+      '<button class="icon" data-act="d-next" aria-label="Next day">' + ICON.right + '</button></div>' +
+      '<div class="navtools"><label class="field"><span>Jump to a date</span><input type="date" data-f="d-jump" value="' + date + '"></label>' +
+      '<button class="btn" data-act="d-today"' + (isToday ? ' disabled' : '') + '>Today</button></div></section>';
+    if (!staff.length) {
+      return h + '<div class="card empty"><strong>No staff yet</strong><p>Add your employees first, then record their hours here every day.</p><button class="btn primary" data-act="tab" data-tab="staff">Add staff</button><button class="btn" data-act="tab" data-tab="backup">Restore a backup</button></div>';
+    }
+    h += '<section><div class="dayhead"><h2 class="sec-title">Hours for this day</h2><button class="btn" data-act="d-fill-all">Fill everyone</button></div>' +
+      '<div style="display:grid;gap:12px">' + staff.map(function (e) { return dayRow(e, date, wid, cfg); }).join('') + '</div>' +
+      '<p class="hint" style="margin-top:10px">Leave a row empty if that person did not work. Changes save by themselves.</p></section>';
+    var T = totalsOf(rowsFor(wid));
+    h += '<section class="card weekso"><h2 class="sec-title">Week so far</h2><div class="tiles two">' +
+      '<div class="tile"><span>Hours</span><b data-t="wk-mins">' + fmtHM(T.mins) + '</b></div>' +
+      '<div class="tile main"><span>Pay</span><b data-t="wk-pay">' + eur(T.total) + '</b></div></div>' +
+      '<button class="btn" data-act="open-week" data-wid="' + wid + '">Open this week (cash and bank)</button></section>';
+    return h;
+  }
+  function refreshDay() {
+    var wid = dayWid(), cfg = cfgOf(wid), date = ui.day;
+    app.querySelectorAll('.dayrow').forEach(function (card) {
+      var sid = card.getAttribute('data-sid'), s = findShift(wid, sid, date), off = isOff(wid, sid, date);
+      var i = card.querySelector('[data-f="d-in"]'), o = card.querySelector('[data-f="d-out"]');
+      var iv = s ? s.in : '', ov = s ? s.out : '';
+      if (i.value !== iv) i.value = iv;
+      if (o.value !== ov) o.value = ov;
+      i.disabled = off; o.disabled = off;
+      card.classList.toggle('isoff', off);
+      card.querySelector('[data-o="dhrs"]').textContent = dayHrs(s, cfg, off);
+      card.querySelector('[data-act="d-off"]').textContent = off ? 'Undo day off' : 'Day off';
+      card.querySelector('[data-act="d-clear"]').disabled = !(s || off);
+    });
+    var T = totalsOf(rowsFor(wid));
+    var a = app.querySelector('[data-t="wk-mins"]'), b = app.querySelector('[data-t="wk-pay"]');
+    if (a) a.textContent = fmtHM(T.mins); if (b) b.textContent = eur(T.total);
+  }
+
+  /* in-place number refresh, so typing never loses focus */
+  function setO(card, k, v) { var el = card.querySelector('[data-o="' + k + '"]'); if (el) el.textContent = v; }
+  function refreshNumbers() {
+    var wid = ui.wid, rows = rowsFor(wid), cfg = cfgOf(wid), cards = app.querySelectorAll('.pay');
+    if (cards.length !== rows.length) { render(); return; }
+    var ttEl = app.querySelector('#tt'); if (ttEl) ttEl.innerHTML = ttBody(wid, rows);
+    rows.forEach(function (r) {
+      var c = app.querySelector('.pay[data-sid="' + CSS.escape(r.sid) + '"]'); if (!c) return;
+      setO(c, 'hours', fmtHM(r.mins)); setO(c, 'ot', r.otMin ? fmtHM(r.otMin) + ' overtime' : '');
+      setO(c, 'reg', eur(r.regPay)); setO(c, 'otpay', eur(r.otPay)); setO(c, 'total', eur(r.total)); setO(c, 'cash', eur(r.cash));
+      c.classList.toggle('over', r.cash < 0);
+      c.querySelector('[data-o="over"]').hidden = !(r.cash < 0);
+      c.querySelector('[data-o="norate"]').hidden = !(r.rate === 0 && r.mins > 0);
+    });
+    var T = totalsOf(rows);
+    var set = function (k, v) { var el = app.querySelector('[data-t="' + k + '"]'); if (el) el.textContent = v; };
+    set('mins', fmtHM(T.mins)); set('total', eur(T.total)); set('cash', eur(T.cash)); set('bank', eur(T.bank));
+    var w = state.weeks[wid];
+    ((w && w.shifts) || []).forEach(function (s) {
+      var el = app.querySelector('[data-h="' + CSS.escape(s.id) + '"]'); if (el) el.textContent = fmtHM(shiftMin(s, cfg));
+    });
+  }
+
+  /* ---------- toast ---------- */
+  var toastTimer = null;
+  function toast(text, actLabel, act) {
+    clearTimeout(toastTimer);
+    toastEl.innerHTML = '<div class="toast-in"><span>' + esc(text) + '</span>' + (actLabel ? '<button data-act="' + act + '">' + esc(actLabel) + '</button>' : '') + '</div>';
+    toastEl.hidden = false;
+    toastTimer = setTimeout(function () { toastEl.hidden = true; undoShift = null; }, 7000);
+  }
+  var undoShift = null;
+
+  /* ---------- events ---------- */
+  function cardSid(el) { var c = el.closest('[data-sid]'); return c ? c.getAttribute('data-sid') : null; }
+
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-act]'); if (!b) return;
+    var act = b.getAttribute('data-act');
+    if (act === 'tab') { ui.tab = b.getAttribute('data-tab'); ui.confirmRm = null; render(); window.scrollTo(0, 0); }
+    else if (act === 'prev') { ui.wid = addDays(ui.wid, -7); ui.form.days = []; ui.msg = ''; render(); }
+    else if (act === 'next') { ui.wid = addDays(ui.wid, 7); ui.form.days = []; ui.msg = ''; render(); }
+    else if (act === 'today') { ui.wid = mondayOf(todayISO()); ui.form.days = []; ui.msg = ''; render(); }
+    else if (act === 'open-week') { ui.wid = b.getAttribute('data-wid'); ui.tab = 'week'; ui.form.days = []; ui.msg = ''; render(); window.scrollTo(0, 0); }
+    else if (act === 'chip') {
+      var i = Number(b.getAttribute('data-i')), at = ui.form.days.indexOf(i);
+      if (at > -1) ui.form.days.splice(at, 1); else ui.form.days.push(i);
+      b.setAttribute('aria-pressed', String(at === -1));
+    }
+    else if (act === 'sv-prev') { ui.svWeek = addDays(ui.svWeek, -7); render(); }
+    else if (act === 'sv-next') { ui.svWeek = addDays(ui.svWeek, 7); render(); }
+    else if (act === 'sv-this') { ui.svWeek = mondayOf(todayISO()); render(); }
+    else if (act === 'sv-switch') { svReset(); try { localStorage.removeItem(SVKEY); } catch (e) {} render(); }
+    else if (act === 'sv-preview') { ui.preview = true; svReset(); render(); window.scrollTo(0, 0); }
+    else if (act === 'sv-exit') { ui.preview = false; svReset(); render(); }
+    else if (act === 'm-prev') { ui.month = addMonths(ui.month, -1); render(); }
+    else if (act === 'm-next') { ui.month = addMonths(ui.month, 1); render(); }
+    else if (act === 'm-this') { ui.month = todayISO().slice(0, 7); render(); }
+    else if (act === 'd-prev') { ui.day = addDays(ui.day, -1); render(); }
+    else if (act === 'd-next') { ui.day = addDays(ui.day, 1); render(); }
+    else if (act === 'd-today') { ui.day = todayISO(); render(); }
+    else if (act === 'd-usual') { var sdu = cardSid(b), u1 = usualFor(sdu); setDayTimes(sdu, u1.inT, u1.outT); refreshDay(); }
+    else if (act === 'd-clear') { setDayTimes(cardSid(b), '', ''); refreshDay(); }
+    else if (act === 'd-off') { var so = cardSid(b); if (isOff(dayWid(), so, ui.day)) setOff(so, false); else markOff(so); refreshDay(); }
+    else if (act === 'd-fill-all') {
+      sortedStaff().forEach(function (e) { if (!findShift(dayWid(), e[0], ui.day) && !isOff(dayWid(), e[0], ui.day)) { var u2 = usualFor(e[0]); setDayTimes(e[0], u2.inT, u2.outT); } });
+      refreshDay();
+    }
+    else if (/^(code|fb)-/.test(act)) fbAct(act, b);
+    else if (act === 'bk-email') backupEmail();
+    else if (act === 'bk-save') { if (downloadBackup()) { markBackup(); ui.bkMsg = 'Backup file saved to your phone.'; ui.bkErr = false; } else { ui.bkMsg = 'Could not create the backup file.'; ui.bkErr = true; } render(); }
+    else if (act === 'bk-restore-yes') restoreApply();
+    else if (act === 'bk-restore-no') { ui.restore = null; render(); }
+    else if (act === 'add-shift') addShift();
+    else if (act === 'del-shift') {
+      var li = b.closest('.shift'), id = li.getAttribute('data-id'), w = state.weeks[ui.wid];
+      var idx = w.shifts.findIndex(function (s) { return s.id === id; });
+      if (idx > -1) { undoShift = { wid: ui.wid, shift: w.shifts.splice(idx, 1)[0] }; queueSave('weeks', ui.wid, 0); render(); toast('Shift removed', 'Undo', 'undo'); }
+    }
+    else if (act === 'undo') {
+      if (undoShift) { var w2 = ensureWeek(undoShift.wid); w2.shifts.push(undoShift.shift); queueSave('weeks', undoShift.wid, 0); undoShift = null; toastEl.hidden = true; render(); }
+    }
+    else if (act === 'add-staff') addStaff();
+    else if (act === 'rm-staff') { ui.confirmRm = cardSid(b); render(); }
+    else if (act === 'rm-cancel') { ui.confirmRm = null; render(); }
+    else if (act === 'rm-confirm') { var sid = cardSid(b); delete state.staff[sid]; ui.confirmRm = null; queueSave('staff', sid, 0); render(); }
+  });
+
+  function addShift() {
+    var f = ui.form;
+    if (!f.sid || !state.staff[f.sid]) { ui.msg = 'Choose an employee first.'; ui.msgErr = true; return render(); }
+    if (!f.days.length) { ui.msg = 'Pick at least one day.'; ui.msgErr = true; return render(); }
+    if (!f.inT || !f.outT) { ui.msg = 'Enter the in and out times.'; ui.msgErr = true; return render(); }
+    if (f.inT === f.outT) { ui.msg = 'In and out times are the same.'; ui.msgErr = true; return render(); }
+    var w = ensureWeek(ui.wid), n = 0;
+    f.days.slice().sort().forEach(function (i) { var dt = addDays(ui.wid, i); removeOffRaw(w, f.sid, dt); w.shifts.push({ id: uid('x'), sid: f.sid, date: dt, in: f.inT, out: f.outT }); n++; });
+    f.days = []; ui.msg = n + (n === 1 ? ' shift added.' : ' shifts added.'); ui.msgErr = false;
+    queueSave('weeks', ui.wid, 0); render();
+  }
+  function addStaff() {
+    var n = ui.newStaff, name = n.name.trim();
+    if (!name) { ui.staffMsg = 'Enter a name.'; return render(); }
+    var order = 0; Object.keys(state.staff).forEach(function (k) { order = Math.max(order, num(state.staff[k].order)); });
+    var id = uid('s');
+    state.staff[id] = { name: name, position: n.position.trim(), rate: num(n.rate), bank: num(n.bank), order: order + 1 };
+    if (mode === 'cloud') state.staff[id].code = genCode();
+    ui.newStaff = { name: '', position: '', rate: '', bank: '' }; ui.staffMsg = '';
+    queueSave('staff', id, 0); render();
+    var el = document.getElementById('ns-name'); if (el) el.focus();
+  }
+
+  document.addEventListener('input', function (e) {
+    var t = e.target, f = t.getAttribute('data-f'); if (!f) return;
+    var sid = cardSid(t);
+    if (f === 'rate') { var w = ensureWeek(ui.wid); w.snap[sid] = w.snap[sid] || { name: nameOf(ui.wid, sid), position: '' }; w.snap[sid].rate = Math.max(0, num(t.value)); queueSave('weeks', ui.wid, 600); refreshNumbers(); }
+    else if (f === 'bank') {
+      var w1 = ensureWeek(ui.wid); w1.snap[sid] = w1.snap[sid] || { name: nameOf(ui.wid, sid), position: '', rate: 0 };
+      w1.snap[sid].bank = Math.max(0, num(t.value)); delete w1.cash[sid];
+      queueSave('weeks', ui.wid, 600); refreshNumbers();
+    }
+    else if (f.indexOf('cfg-') === 0) { var w2 = ensureWeek(ui.wid); w2.cfg[f.slice(4)] = Math.max(0, num(t.value)); queueSave('weeks', ui.wid, 600); refreshNumbers(); }
+    else if (f === 'st-name' || f === 'st-position' || f === 'st-rate' || f === 'st-bank') {
+      var s = state.staff[sid]; if (!s) return;
+      if (f === 'st-name') s.name = t.value; else if (f === 'st-position') s.position = t.value;
+      else if (f === 'st-rate') s.rate = Math.max(0, num(t.value)); else s.bank = Math.max(0, num(t.value));
+      queueSave('staff', sid, 600);
+    }
+    else if (f === 'ns-name') ui.newStaff.name = t.value;
+    else if (f === 'ns-position') ui.newStaff.position = t.value;
+    else if (f === 'ns-rate') ui.newStaff.rate = t.value;
+    else if (f === 'ns-bank') ui.newStaff.bank = t.value;
+    else if (f === 'bk-email') setSetting('email', t.value.trim());
+  });
+  document.addEventListener('change', function (e) {
+    var t = e.target, f = t.getAttribute('data-f'); if (!f) return;
+    if (f === 'jump') { if (t.value) { ui.wid = mondayOf(t.value); ui.form.days = []; ui.msg = ''; render(); } }
+    else if (f === 'd-in' || f === 'd-out') {
+      var card = t.closest('.dayrow');
+      setDayTimes(card.getAttribute('data-sid'), card.querySelector('[data-f="d-in"]').value, card.querySelector('[data-f="d-out"]').value);
+      refreshDay();
+    }
+    else if (f === 'd-jump') { if (t.value) { ui.day = t.value; render(); } }
+    else if (f === 'st-code') {
+      var cs = cardSid(t), curS = state.staff[cs]; if (!curS) return;
+      var v = t.value.trim(), mEl = t.closest('.staffrow').querySelector('[data-m="code"]');
+      var clash = Object.keys(state.staff).some(function (k) { return k !== cs && state.staff[k].code === v; });
+      var why = !/^\d{4,8}$/.test(v) ? 'A code is 4 to 8 digits.' : clash ? 'Another employee already has this code.' : '';
+      if (why) { mEl.textContent = why; mEl.hidden = false; t.value = curS.code || ''; }
+      else { mEl.hidden = true; if (v !== curS.code) { curS.code = v; queueSave('staff', cs, 300); } }
+    }
+    else if (f === 'bk-file') readBackupFile(t);
+    else if (fbInput(f, t)) { }
+    else if (f === 'f-sid') ui.form.sid = t.value;
+    else if (f === 'f-in') ui.form.inT = t.value;
+    else if (f === 'f-out') ui.form.outT = t.value;
+    else if (f.indexOf('s-') === 0) {
+      var li = t.closest('.shift'), w = state.weeks[ui.wid]; if (!li || !w) return;
+      var s = w.shifts.find(function (x) { return x.id === li.getAttribute('data-id'); }); if (!s) return;
+      var key = f === 's-date' ? 'date' : f === 's-in' ? 'in' : 'out';
+      if (!t.value) { t.value = s[key]; return; }
+      if (key === 'date' && (t.value < ui.wid || t.value > addDays(ui.wid, 6))) { t.value = s.date; return; }
+      s[key] = t.value; queueSave('weeks', ui.wid, 300); refreshNumbers();
+    }
+  });
+
+  /* ---------- backup ---------- */
+  var LSS = 'weekly-staff-pay-settings-v1';
+  function getSettings() { try { return JSON.parse(localStorage.getItem(LSS) || '{}') || {}; } catch (e) { return {}; } }
+  function setSetting(k, v) { var o = getSettings(); o[k] = v; try { localStorage.setItem(LSS, JSON.stringify(o)); } catch (e) {} }
+  function hasData() { return Object.keys(state.staff).length > 0 || Object.keys(state.weeks).length > 0; }
+  function backupAge() { var t = getSettings().lastBackup; return t ? Math.floor((Date.now() - t) / 86400000) : null; }
+  function markBackup() { setSetting('lastBackup', Date.now()); }
+  function nudgeHTML() {
+    if (!hasData()) return '';
+    var a = backupAge();
+    if (a !== null && a < 7) return '';
+    return '<section class="card nudge"><div><strong>' + (a === null ? 'No backup yet' : 'Last backup was ' + a + ' days ago') + '</strong>' +
+      '<p class="hint">Email yourself a copy so your records are safe if you lose or change your phone.</p></div>' +
+      '<button class="btn primary" data-act="tab" data-tab="backup">Back up</button></section>';
+  }
+  function backupPayload() { return { app: 'weekly-staff-pay', version: 1, exportedAt: new Date().toISOString(), staff: state.staff, weeks: state.weeks }; }
+  function backupName() { return 'staff-pay-backup-' + todayISO() + '.json'; }
+  function summaryText() {
+    var ids = Object.keys(state.weeks).filter(function (id) { return (state.weeks[id].shifts || []).length; }).sort().reverse();
+    var lines = ['Weekly Staff Pay backup, ' + todayISO(), ''];
+    ids.slice(0, 4).forEach(function (id) {
+      var T = totalsOf(rowsFor(id));
+      lines.push(fShort.format(parse(id)) + ' – ' + fShort.format(parse(addDays(id, 6))) + ': ' + fmtHM(T.mins) + ' h, ' + eur(T.total) + ' (bank ' + eur(T.bank) + ', cash ' + eur(T.cash) + ')');
+    });
+    if (ids.length) {
+      lines.push('', 'Latest week by employee:');
+      rowsFor(ids[0]).forEach(function (r) { if (r.mins || r.total) lines.push(r.name + ': ' + fmtHM(r.mins) + ' h, ' + eur(r.total) + ' (bank ' + eur(r.bank) + ', cash ' + eur(r.cash) + ')'); });
+    }
+    lines.push('', 'The attached file restores everything: Backup tab, Restore from a backup file.');
+    return lines.join('\n');
+  }
+  function downloadBackup() {
+    try {
+      var blob = new Blob([JSON.stringify(backupPayload(), null, 1)], { type: 'application/json' });
+      var url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = backupName(); document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      return true;
+    } catch (e) { return false; }
+  }
+  function backupEmail() {
+    var email = (getSettings().email || '').trim(), text = summaryText(), files = null, types = ['application/json', 'text/plain'];
+    try {
+      if (navigator.share && navigator.canShare) {
+        for (var i = 0; i < types.length && !files; i++) {
+          var f = new File([JSON.stringify(backupPayload(), null, 1)], backupName(), { type: types[i] });
+          if (navigator.canShare({ files: [f] })) files = [f];
+        }
+      }
+    } catch (e) { files = null; }
+    if (files) {
+      navigator.share({ files: files, title: 'Staff pay backup ' + todayISO(), text: text }).then(function () {
+        markBackup(); ui.bkMsg = 'Backup shared. If you chose Mail, send it to ' + (email || 'yourself') + '.'; ui.bkErr = false; render();
+      }, function (err) {
+        if (err && err.name === 'AbortError') { ui.bkMsg = 'Cancelled. Nothing was sent.'; ui.bkErr = false; }
+        else { ui.bkMsg = 'Could not open the share sheet. Use “Save backup file” instead.'; ui.bkErr = true; }
+        render();
+      });
+      return;
+    }
+    var saved = downloadBackup();
+    if (saved) markBackup();
+    ui.bkMsg = saved ? 'Backup file saved. Your mail app should open: attach the saved file and send.' : 'Could not create the backup file.';
+    ui.bkErr = !saved; render();
+    if (saved) {
+      var href = 'mailto:' + encodeURIComponent(email).replace(/%40/g, '@') + '?subject=' + encodeURIComponent('Staff pay backup ' + todayISO()) +
+        '&body=' + encodeURIComponent(text + '\n\n(Attach the saved file ' + backupName() + ')');
+      setTimeout(function () { location.href = href; }, 400);
+    }
+  }
+  function readBackupFile(input) {
+    var f = input.files && input.files[0]; if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () {
+      try {
+        var o = JSON.parse(String(rd.result));
+        if (!o || o.app !== 'weekly-staff-pay' || typeof o.staff !== 'object' || typeof o.weeks !== 'object') throw new Error('bad file');
+        ui.restore = { data: o, name: f.name, staffN: Object.keys(o.staff).length, weekN: Object.keys(o.weeks).length };
+        ui.bkMsg = ''; ui.bkErr = false;
+      } catch (e) { ui.restore = null; ui.bkMsg = 'That file is not a Weekly Staff Pay backup.'; ui.bkErr = true; }
+      render();
+    };
+    rd.onerror = function () { ui.bkMsg = 'Could not read that file.'; ui.bkErr = true; render(); };
+    rd.readAsText(f);
+  }
+  function restoreApply() {
+    var r = ui.restore; if (!r) return;
+    Object.keys(pending).forEach(function (k) { clearTimeout(pending[k].timer); delete pending[k]; });
+    state.staff = r.data.staff || {}; state.weeks = r.data.weeks || {}; ensureCodesLocal();
+    var ok = localSave(); scheduleSync(); ui.restore = null; ui.confirmRm = null;
+    ui.bkMsg = ok ? 'Restored ' + Object.keys(state.staff).length + ' employees and ' + Object.keys(state.weeks).length + ' weeks.' : 'Restored, but this device could not save it.';
+    ui.bkErr = !ok; setStatus(ok ? 'saved' : 'error'); render();
+  }
+  function backupHTML() {
+    var S = getSettings(), a = backupAge();
+    var last = S.lastBackup ? new Date(S.lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + (a === 0 ? ' (today)' : ' (' + a + ' days ago)') : 'Never';
+    var h = '<section class="card"><h2 class="sec-title">Email backup</h2><div class="addform">' +
+      '<label class="field"><span>Your email</span><input type="email" id="bk-email" data-f="bk-email" inputmode="email" autocomplete="email" placeholder="name@example.com" value="' + esc(S.email || '') + '"></label>' +
+      '<p class="hint">Last backup: <strong>' + esc(last) + '</strong></p>' +
+      '<button class="btn primary" data-act="bk-email">Email me a backup</button>' +
+      '<p class="hint">Opens your phone’s share sheet with the backup file attached. Pick Mail and send it to yourself. Do this at the end of each week.</p>' +
+      '<p class="msg' + (ui.bkErr ? ' err' : '') + '" role="status">' + esc(ui.bkMsg || '') + '</p></div></section>';
+    h += '<section class="card"><h2 class="sec-title">Save or restore</h2><div class="addform">' +
+      '<button class="btn" data-act="bk-save">Save backup file to this phone</button>' +
+      '<label class="field"><span>Restore from a backup file</span><input type="file" id="bk-file" data-f="bk-file" accept=".json,application/json,text/plain"></label>';
+    if (ui.restore) {
+      h += '<div class="card" style="background:var(--surface-2)"><p><strong>' + esc(ui.restore.name) + '</strong></p>' +
+        '<p class="hint">Contains ' + ui.restore.staffN + ' employees and ' + ui.restore.weekN + ' weeks. Restoring replaces everything on this phone.</p>' +
+        '<div style="display:flex;gap:8px;margin-top:10px"><button class="btn primary" style="flex:1" data-act="bk-restore-yes">Replace my data</button><button class="btn" style="flex:1" data-act="bk-restore-no">Cancel</button></div></div>';
+    }
+    h += '</div></section>' +
+      '<p class="hint">Your records live on this phone. Keep the app on your home screen and back up regularly. If you clear the browser’s website data or delete the app, the records are gone unless you have a backup.</p>';
+    return h;
+  }
+
+  /* ---------- start ---------- */
+  mode = 'local'; localLoad(); ensureCodesLocal(); render(); setStatus('local');
+  if (fbOn()) runSync(false);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && fbOn()) runSync(false); });
+  if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(function () {}); }
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) { navigator.serviceWorker.register('sw.js').catch(function () {}); }
+})();
+</script>
+</body>
+</html>
