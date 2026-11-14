@@ -1,5 +1,5 @@
 /* Offline cache for My Shifts. Bump CACHE when the app files change. */
-const CACHE = 'my-shifts-v4';
+const CACHE = 'my-shifts-v5';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -19,6 +19,15 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   const u = new URL(req.url);
   if (req.method !== 'GET' || u.origin !== self.location.origin || u.pathname.startsWith('/api/')) return;
+  /* The page itself: newest version first, the saved copy only when offline. */
+  if (req.mode === 'navigate' || u.pathname.endsWith('/') || u.pathname.endsWith('index.html')) {
+    e.respondWith(
+      fetch(req, { cache: 'no-store' })
+        .then((res) => { if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); } return res; })
+        .catch(() => caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match('index.html')))
+    );
+    return;
+  }
   e.respondWith(
     caches.match(req, { ignoreSearch: true }).then((hit) => {
       const net = fetch(req)
