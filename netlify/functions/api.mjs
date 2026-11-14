@@ -3,8 +3,13 @@
 //   POST /api/login                manager: first call sets the password, later calls check it
 //   PUT  /api/sync                 manager: replace all schedules + save a full private backup
 //   GET  /api/backup               manager: read the latest backup
+//   GET  /api/status               manager: who has seen their latest change, who has notifications on
+//   GET  /api/push-key             anyone: public key for notifications
+//   POST /api/subscribe            employee: turn notifications on for this phone
+//   POST /api/seen                 employee: "I have opened my current times"
 import { getStore } from '@netlify/blobs';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import webpush from 'web-push';
 
 const json = (o, status = 200) => new Response(JSON.stringify(o), {
   status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -21,8 +26,11 @@ function cleanSchedule(s) {
     .slice(0, 400)
     .map((x) => ({ d: x.d, i: x.i, o: TIME.test(x.o) ? x.o : '' }));
   const off = (Array.isArray(s && s.off) ? s.off : []).filter((d) => DATE.test(d)).slice(0, 400);
-  return { name: String((s && s.name) || '').slice(0, 80), shifts, off, upd: new Date().toISOString() };
+  return { name: String((s && s.name) || '').slice(0, 80), shifts, off };
 }
+// The part of a schedule an employee should be told about: today and later.
+const futureSig = (s, today) => JSON.stringify([s.shifts.filter((x) => x.d >= today), s.off.filter((d) => d >= today)]);
+const fullSig = (s) => JSON.stringify([s.name, s.shifts, s.off]);
 
 export default async (req) => {
   const url = new URL(req.url);
@@ -30,6 +38,39 @@ export default async (req) => {
   const cfg = getStore({ name: 'config', consistency: 'strong' });
   const sch = getStore({ name: 'schedules', consistency: 'strong' });
   const bak = getStore({ name: 'backup', consistency: 'strong' });
+  const subs = getStore({ name: 'subs', consistency: 'strong' });
+  const seen = getStore({ name: 'seen', consistency: 'strong' });
+
+  const vapid = async () => {
+    let v = await cfg.get('vapid', { type: 'json' });
+    if (!v) { v = webpush.generateVAPIDKeys(); await cfg.setJSON('vapid', v); }
+    return v;
+  };
+  const notify = async (k) => {
+    const list = (await subs.get(k, { type: 'json' })) || [];
+    if (!list.length) return 0;
+    const v = await vapid();
+    const payload = JSON.stringify({ title: 'My Shifts', body: 'Your work times changed. Tap to see them.' });
+    const keep = []; let sent = 0;
+    for (const sub of list) {
+      try {
+        await webpush.sendNotification(sub, payload, { TTL: 86400, urgency: 'high', vapidDetails: { subject: url.origin, publicKey: v.publicKey, privateKey: v.privateKey } });
+        keep.push(sub); sent++;
+      } catch (e) { if (!(e && (e.statusCode === 404 || e.statusCode === 410))) keep.push(sub); }
+    }
+    if (keep.length !== list.length) await subs.setJSON(k, keep);
+    return sent;
+  };
+  const statusOf = async (keys) => {
+    const out = {};
+    for (const k of keys) {
+      const d = await sch.get(k, { type: 'json' }); if (!d) continue;
+      const sn = await seen.get(k, { type: 'json' });
+      const sl = (await subs.get(k, { type: 'json' })) || [];
+      out[k] = { chg: d.chg || null, seen: sn && sn.upd === d.upd ? sn.at : null, lastSeen: sn ? sn.at : null, push: sl.length > 0 };
+    }
+    return out;
+  };
 
   const tokenOf = () => { const m = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.get('authorization') || ''); return m ? m[1] : ''; };
   const isAdmin = async () => {
@@ -68,8 +109,21 @@ export default async (req) => {
       const want = {};
       Object.keys(body.schedules || {}).slice(0, 300).forEach((p) => { const k = phoneKey(p); if (k.length >= 7 && !want[k]) want[k] = cleanSchedule(body.schedules[p]); });
       const { blobs } = await sch.list();
-      for (const b of blobs) if (!want[b.key]) await sch.delete(b.key);
-      for (const k of Object.keys(want)) await sch.setJSON(k, want[k]);
+      for (const b of blobs) if (!want[b.key]) { await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); }
+      const now = new Date().toISOString();
+      const today = DATE.test(body.today) ? body.today : now.slice(0, 10);
+      let notified = 0;
+      for (const k of Object.keys(want)) {
+        const prev = await sch.get(k, { type: 'json' });
+        const next = want[k];
+        if (prev && fullSig(prev) === fullSig(next)) continue;            // nothing changed for this person
+        next.upd = now;
+        next.chg = prev ? prev.chg || null : null;
+        const changedAhead = prev ? futureSig(prev, today) !== futureSig(next, today) : (next.shifts.some((x) => x.d >= today) || next.off.some((d) => d >= today));
+        if (changedAhead) { next.chg = now; }
+        await sch.setJSON(k, next);
+        if (changedAhead && prev) { try { notified += await notify(k); } catch (e) { /* a failed notification never blocks saving */ } }
+      }
       let backedUp = false;
       const bk = body.backup;
       if (bk && typeof bk.staff === 'object' && typeof bk.weeks === 'object' && (Object.keys(bk.staff).length || Object.keys(bk.weeks).length)) {
@@ -80,13 +134,41 @@ export default async (req) => {
         await bak.setJSON('meta', { at });
         backedUp = true;
       }
-      return json({ ok: true, published: Object.keys(want).length, backedUp });
+      return json({ ok: true, published: Object.keys(want).length, backedUp, notified, status: await statusOf(Object.keys(want)) });
     }
 
     if (path === 'backup' && req.method === 'GET') {
       if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
       const d = await bak.get('latest', { type: 'json' });
       return d ? json(d) : json({ error: 'notfound' }, 404);
+    }
+
+    if (path === 'status' && req.method === 'GET') {
+      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      const { blobs } = await sch.list();
+      return json({ ok: true, status: await statusOf(blobs.map((b) => b.key)) });
+    }
+
+    if (path === 'push-key' && req.method === 'GET') return json({ key: (await vapid()).publicKey });
+
+    if (path === 'subscribe' && req.method === 'POST') {
+      const body = JSON.parse((await req.text()).slice(0, 5000));
+      const k = phoneKey(body.phone), sub = body.sub;
+      if (k.length < 7 || !sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) return json({ error: 'bad' }, 400);
+      if (!(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
+      const list = ((await subs.get(k, { type: 'json' })) || []).filter((x) => x.endpoint !== sub.endpoint);
+      list.push({ endpoint: sub.endpoint, keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } });
+      await subs.setJSON(k, list.slice(-5));
+      return json({ ok: true });
+    }
+
+    if (path === 'seen' && req.method === 'POST') {
+      const body = JSON.parse((await req.text()).slice(0, 500));
+      const k = phoneKey(body.phone);
+      const d = k.length >= 7 ? await sch.get(k, { type: 'json' }) : null;
+      if (!d) return json({ error: 'notfound' }, 404);
+      if (body.upd && body.upd === d.upd) await seen.setJSON(k, { at: new Date().toISOString(), upd: d.upd });
+      return json({ ok: true });
     }
 
     return json({ error: 'unknown' }, 404);

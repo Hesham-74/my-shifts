@@ -1,5 +1,5 @@
 /* Offline cache for My Shifts. Bump CACHE when the app files change. */
-const CACHE = 'my-shifts-v2';
+const CACHE = 'my-shifts-v3';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -30,4 +30,20 @@ self.addEventListener('fetch', (e) => {
       return hit || net;
     })
   );
+});
+
+/* Notifications: the manager changed this person's times. */
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
+  e.waitUntil(self.registration.showNotification(d.title || 'My Shifts', {
+    body: d.body || 'Your work times changed. Tap to see them.', tag: 'shifts', renotify: true, icon: 'icon-192.png', badge: 'icon-192.png'
+  }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    for (const c of list) { if ('focus' in c) return c.focus(); }
+    return self.clients.openWindow('./');
+  }));
 });

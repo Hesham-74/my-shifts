@@ -115,9 +115,51 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
       if (r.status === 404 || r.status === 400) return { kind: 'notfound' };
       if (!r.ok) return { kind: 'error' };
       return r.json().then(function (d) {
-        return { kind: 'ok', data: { name: d.name || '', shifts: (d.shifts || []).filter(Boolean), off: (d.off || []).filter(Boolean), upd: d.upd || '' } };
+        return { kind: 'ok', data: { name: d.name || '', shifts: (d.shifts || []).filter(Boolean), off: (d.off || []).filter(Boolean), upd: d.upd || '', chg: d.chg || '' } };
       });
     });
+  }
+
+  /* Tell the manager this person has opened their current times. */
+  function markSeen() {
+    if (!saved || !saved.data || !saved.data.upd || document.visibilityState !== 'visible') return;
+    if (saved.seenUpd === saved.data.upd) return;
+    var upd = saved.data.upd;
+    fetch('/api/seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: saved.phone, upd: upd }) })
+      .then(function (r) { if (r.ok && saved) { saved.seenUpd = upd; store(); } }, function () {});
+  }
+
+  /* ---------- notifications ---------- */
+  var pushOK = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  function b64ToBytes(b64) {
+    var pad = '='.repeat((4 - b64.length % 4) % 4), raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/')), out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  function pushOn() {
+    ui.pushMsg = 'Turning on…'; ui.pushErr = false; render();
+    Notification.requestPermission().then(function (perm) {
+      if (perm !== 'granted') throw new Error('denied');
+      return Promise.all([navigator.serviceWorker.ready, fetch('/api/push-key', { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('key'); return r.json(); })]);
+    }).then(function (a) {
+      return a[0].pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(a[1].key) });
+    }).then(function (sub) {
+      return fetch('/api/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: saved.phone, sub: sub.toJSON() }) });
+    }).then(function (r) {
+      if (!r.ok) throw new Error('save');
+      saved.push = true; store(); ui.pushMsg = ''; render();
+    }).catch(function (e) {
+      ui.pushErr = true;
+      ui.pushMsg = e && e.message === 'denied' ? 'Notifications are blocked for this app. Allow them in your phone settings, then try again.' : 'Could not turn notifications on. Try again in a moment.';
+      render();
+    });
+  }
+  function pushHTML() {
+    if (saved.push && pushOK && Notification.permission === 'granted') return '<p class="hint">Notifications are on. You will be told when your times change.</p>';
+    if (!pushOK) return '<p class="hint">To get a notification when your times change: add this app to your Home Screen, then open it from there.</p>';
+    return '<section class="card"><p style="margin-bottom:10px">Get a notification when your manager changes your times.</p>' +
+      '<button class="btn primary" data-act="push-on">Turn on notifications</button>' +
+      '<p class="msg' + (ui.pushErr ? ' err' : '') + '" role="status">' + esc(ui.pushMsg || '') + '</p></section>';
   }
 
   function refresh(manual) {
@@ -125,7 +167,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     ui.busy = true; setStatus(manual ? 'Updating…' : '');
     fetchDoc(saved.phone).then(function (res) {
       ui.busy = false; ui.online = true;
-      if (res.kind === 'ok') { saved.data = res.data; saved.fetched = Date.now(); store(); ui.phase = 'show'; ui.msg = ''; }
+      if (res.kind === 'ok') { saved.data = res.data; saved.fetched = Date.now(); store(); ui.phase = 'show'; ui.msg = ''; markSeen(); }
       else if (res.kind === 'notfound') {
         forget(); ui.phase = 'enter'; ui.err = true; ui.msg = 'That phone number is not on the staff list. Check with your manager that they saved your number.';
             } else { ui.online = false; if (!saved.data) { ui.phase = 'enter'; ui.err = true; ui.msg = 'Could not load your times. Try again in a moment.'; } }
@@ -175,7 +217,7 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
         (d.off.indexOf(ds) > -1 ? '<span class="off">Day off</span>' : '<span class="none">Not scheduled</span>');
       h += '<li class="day' + (ds === today ? ' today' : '') + '"><div class="d"><b>' + fDay.format(dt) + '</b><span>' + fShort.format(dt) + '</span></div><div class="t">' + body + '</div></li>';
     }
-    h += '</ul></section><div class="row"><button class="btn" data-act="this">This week</button><button class="btn" data-act="refresh">Refresh</button></div>';
+    h += '</ul></section><div class="row"><button class="btn" data-act="this">This week</button><button class="btn" data-act="refresh">Refresh</button></div>' + pushHTML();
     var upd = d.upd ? new Date(d.upd) : null;
     h += '<p class="hint">' + (ui.online ? '' : 'You are offline. Showing the last times saved on this phone. ') +
       (upd && !isNaN(upd.getTime()) ? 'Updated by your manager ' + esc(fWhen.format(upd)) + '. ' : '') +
@@ -205,9 +247,10 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
     else if (a === 'next') { ui.wk = addDays(ui.wk, 7); render(); }
     else if (a === 'this') { ui.wk = mondayOf(todayISO()); render(); }
     else if (a === 'refresh') refresh(true);
+    else if (a === 'push-on') pushOn();
     else if (a === 'switch') { forget(); ui.phase = 'enter'; ui.draft = ''; ui.err = false; ui.msg = ''; render(); }
   });
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && saved) { refresh(false); } });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && saved) { markSeen(); refresh(false); } });
   window.addEventListener('online', function () { if (saved) refresh(false); });
   setInterval(function () { if (document.visibilityState === 'visible' && saved) refresh(false); }, 300000);
 
