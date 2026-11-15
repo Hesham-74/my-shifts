@@ -478,7 +478,7 @@ export default async (req) => {
       }
       const now = new Date().toISOString();
       const today = DATE.test(body.today) ? body.today : now.slice(0, 10);
-      let notified = 0;
+      let notified = 0; const pend = {};
       for (const k of Object.keys(want)) {
         const prev = await sch.get(k, { type: 'json' });
         const next = want[k];
@@ -489,7 +489,7 @@ export default async (req) => {
         if (changedAhead) { next.chg = now; }
         await sch.setJSON(k, next);
         await asks.delete(k);
-        if (changedAhead && prev) { try { notified += await notify(k); } catch (e) { /* a failed notification never blocks saving */ } }
+        if (changedAhead && prev) pend[k] = 1;   // told later: when the manager taps Send, or 30 minutes after the last change
       }
       let backedUp = false;
       const bk = body.backup;
@@ -521,7 +521,11 @@ export default async (req) => {
         await bak.setJSON('meta', { at, rev, by: role });
         backedUp = true;
       }
-      return json({ ok: true, rev, published: Object.keys(want).length, backedUp, notified, status: await statusOf(Object.keys(want)) });
+      const pq = (await cfg.get('pending', { type: 'json' })) || { keys: {} };
+      Object.keys(pq.keys || {}).forEach((k) => { if (!want[k]) delete pq.keys[k]; });
+      if (Object.keys(pend).length) { pq.keys = Object.assign(pq.keys || {}, pend); pq.last = Date.now(); }
+      await cfg.setJSON('pending', pq);
+      return json({ ok: true, rev, published: Object.keys(want).length, backedUp, notified, pending: Object.keys(pq.keys || {}).length, pendingSince: pq.last || null, status: await statusOf(Object.keys(want)) });
     }
 
     if (path === 'data' && req.method === 'GET') {
@@ -539,10 +543,21 @@ export default async (req) => {
       return d ? json(d) : json({ error: 'notfound' }, 404);
     }
 
+    if (path === 'notify-now' && req.method === 'POST') {
+      // Tell everyone whose coming shifts changed since the last time staff were told.
+      if (!(await signedIn())) return no();
+      const pq = (await cfg.get('pending', { type: 'json' })) || { keys: {} };
+      let sent = 0, people = 0;
+      for (const k of Object.keys(pq.keys || {})) { people++; try { if (await notify(k)) sent++; } catch (e) { /* next person */ } }
+      await cfg.setJSON('pending', { keys: {}, last: null, sentAt: Date.now() });
+      return json({ ok: true, people, sent });
+    }
+
     if (path === 'status' && req.method === 'GET') {
       if (!(await signedIn())) return no();
       const { blobs } = await sch.list();
-      return json({ ok: true, status: await statusOf(blobs.map((b) => b.key)) });
+      const pq = (await cfg.get('pending', { type: 'json' })) || { keys: {} };
+      return json({ ok: true, pending: Object.keys(pq.keys || {}).length, pendingSince: pq.last || null, status: await statusOf(blobs.map((b) => b.key)) });
     }
 
     if (path === 'push-key' && req.method === 'GET') return json({ key: (await vapid()).publicKey });

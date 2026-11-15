@@ -644,7 +644,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
     var sent = JSON.parse(JSON.stringify(netCfg().dirty || {})), stale = null;
     return netApi('PUT', 'sync', payload).then(function (res) {
       var d = netCfg().dirty || {}; Object.keys(sent).forEach(function (k) { if (d[k] === sent[k]) delete d[k]; });
-      netRun.lastSig = sig; netSet({ last: Date.now(), err: '', rev: res.rev || 0, dirty: d }); if (res && res.status) { netRun.status = res.status; seenShow(); }
+      netRun.lastSig = sig; netSet({ last: Date.now(), err: '', rev: res.rev || 0, dirty: d }); if (res && res.status) { netRun.status = res.status; seenShow(); } if (res && typeof res.pending === 'number') { netRun.pending = res.pending; netRun.pendingSince = res.pendingSince; pendingShow(); }
     }, function (e) {
       if (e.status === 409 && e.data && e.data.error === 'stale') { stale = e.data; return; }
       if (e.status === 409 && e.data && e.data.error === 'nodata') { netSet({ err: 'The manager has not saved any records yet.' }); return; }
@@ -671,9 +671,24 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       if (el) { var t = seenLine(state.staff[sid]); el.textContent = t; el.className = 'hint seen' + (/not seen yet/.test(t) ? ' wait' : /^Seen/.test(t) ? ' ok' : ''); }
     });
   }
+  /* Shift changes wait here until the manager sends them, or until 30 minutes after the last change. */
+  function pendingHTML() {
+    var n = netRun.pending || 0; if (!fbOn() || !n) return '';
+    var left = netRun.pendingSince ? Math.max(1, Math.ceil((netRun.pendingSince + 30 * 60000 - Date.now()) / 60000)) : 30;
+    return '<section class="card nudge" id="pendbar"><div><strong>' + n + (n === 1 ? ' person has' : ' people have') + ' new times not sent yet</strong>' +
+      '<p class="hint">They get one notification when you tap Send, or automatically about ' + left + ' min after your last change.</p></div>' +
+      '<button class="btn primary" data-act="fb-notify-now">' + (ui.notifyBusy ? 'Sending…' : 'Send') + '</button></section>';
+  }
+  function pendingShow() {
+    var el = document.getElementById('pendbar'), html = (ui.tab === 'today' || ui.tab === 'week') && !needAuth() ? pendingHTML() : '';
+    if (el && !html) { el.remove(); return; }
+    if (!html) return;
+    if (el) el.outerHTML = html; else app.insertAdjacentHTML('afterbegin', html);
+  }
+  setInterval(function () { if (netRun.pending && document.visibilityState === 'visible') pendingShow(); }, 60000);
   function netStatus() {
     if (!fbOn()) return;
-    netApi('GET', 'status').then(function (res) { netRun.status = res.status || {}; seenShow(); }, function () {});
+    netApi('GET', 'status').then(function (res) { netRun.status = res.status || {}; seenShow(); if (typeof res.pending === 'number') { netRun.pending = res.pending; netRun.pendingSince = res.pendingSince; pendingShow(); } }, function () {});
   }
   function netRestore() {
     return netApi('GET', 'backup').then(function (o) {
@@ -1232,6 +1247,13 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       if (!fbOn()) { toast('Turn the staff app on first (bottom of this page).'); return; }
       if (phoneKey(s4.phone).length < 7) { toast('Enter ' + s4.name + '’s phone number first.'); return; }
       nudge(s4.phone, s4.name);
+    } else if (act === 'fb-notify-now') {
+      if (ui.notifyBusy) return;
+      ui.notifyBusy = true; pendingShow();
+      runSync(false).then(function () { return netApi('POST', 'notify-now', {}); }).then(function (r) {
+        ui.notifyBusy = false; netRun.pending = 0; pendingShow();
+        toast(r.people ? r.people + (r.people === 1 ? ' person was' : ' people were') + ' told about their new times' + (r.people - r.sent > 0 ? ' (' + (r.people - r.sent) + ' have notifications off)' : '') + '.' : 'Nothing new to send.');
+      }, function (e) { ui.notifyBusy = false; pendingShow(); toast(netWhy(e)); });
     } else if (act === 'fb-nudge') { nudge('', '');
     } else if (act === 'fb-remind-on') { remindOn();
     } else if (act === 'fb-remind-off') { remindOff();
@@ -1510,7 +1532,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
     });
   }
-  function render() { var tb = document.getElementById('tabs'), bb = document.getElementById('branchbar'), h1 = document.querySelector('.bar h1'); if (h1) h1.textContent = netCfg().company || 'My Shifts'; if (needAuth()) { if (tb) tb.hidden = true; if (bb) { bb.hidden = true; bb.setAttribute('data-off', '1'); } app.innerHTML = authHTML(); return; } if (bb) bb.removeAttribute('data-off'); renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } applyRole(); branchBar(); }
+  function render() { var tb = document.getElementById('tabs'), bb = document.getElementById('branchbar'), h1 = document.querySelector('.bar h1'); if (h1) h1.textContent = netCfg().company || 'My Shifts'; if (needAuth()) { if (tb) tb.hidden = true; if (bb) { bb.hidden = true; bb.setAttribute('data-off', '1'); } app.innerHTML = authHTML(); return; } if (bb) bb.removeAttribute('data-off'); renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } pendingShow(); applyRole(); branchBar(); }
   function renderCore() {
     var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
     if (tabsEl) tabsEl.hidden = sview || !roleKnown;
