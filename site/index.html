@@ -201,6 +201,16 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
       (m(sl.comments) ? '<h4>Comments</h4><p>' + esc(sl.comments) + '</p>' : '') + (m(sl.notes) ? '<h4>Notes</h4><p>' + esc(sl.notes) + '</p>' : '') + '</div>';
   }
 
+  /* Save or share a PDF on the phone: the share sheet where the phone has one, a download otherwise. */
+  function savePdf(blob, name) {
+    try {
+      var f = new File([blob], name, { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [f] })) return navigator.share({ files: [f], title: name }).catch(function () {});
+    } catch (e) {}
+    var u = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = u; a.download = name; a.target = '_blank'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
+  }
   /* ---------- payslips released by the employer ---------- */
   function loadSlips() {
     if (!saved) return;
@@ -335,7 +345,8 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
   }
   function showHTML() {
     if (ui.slipOpen !== undefined && ui.slipOpen !== null && (saved.slips || [])[ui.slipOpen]) {
-      return '<button class="btn" data-act="slip-back" style="justify-self:start">Back to my times</button><section class="card">' + slipView(saved.slips[ui.slipOpen].slip || {}) + '</section>';
+      return '<button class="btn" data-act="slip-back" style="justify-self:start">Back to my times</button><section class="card">' + slipView(saved.slips[ui.slipOpen].slip || {}) + '</section>' +
+        '<button class="btn primary" data-act="slip-pdf">' + (ui.pdfBusy ? 'Making the PDF…' : 'Download as PDF') + '</button>';
     }
     var d = saved.data, today = todayISO(), wk = ui.wk, minWk = mondayOf(addDays(today, -14)), maxWk = addDays(mondayOf(today), 56), nx = nextShift(d);
     var h = '<section class="card"><p class="hi">Hi ' + esc(d.name) + '</p>' + (saved.company ? '<p class="hint" style="margin:-4px 0 8px">' + esc(saved.company) + '</p>' : '') + (d.leave ? '<p class="hint" style="margin-bottom:8px"><strong>You are marked as on leave.</strong> Tell your manager when you are back.</p>' : '') + (nx ?
@@ -411,6 +422,13 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
     else if (a === 'push-on') pushOn();
     else if (a === 'slip') { ui.slipOpen = Number(b.getAttribute('data-i')); render(); window.scrollTo(0, 0); }
     else if (a === 'slip-back') { ui.slipOpen = null; render(); }
+    else if (a === 'slip-pdf') {
+      var it = (saved.slips || [])[ui.slipOpen]; if (!it || ui.pdfBusy) return;
+      ui.pdfBusy = true; render();
+      fetch('/api/payslip-pdf?phone=' + encodeURIComponent(saved.phone) + cq() + '&wid=' + encodeURIComponent(it.wid), { headers: auth(), cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error('pdf'); return r.blob(); })
+        .then(function (bl) { ui.pdfBusy = false; render(); savePdf(bl, 'Payslip-' + it.wid + '.pdf'); }, function () { ui.pdfBusy = false; render(); setStatus('Could not make the PDF', true); });
+    }
     else if (a === 'ask') {
       ui.askMsg = 'Sending…'; ui.askErr = false; render();
       post('ask', { phone: saved.phone }, auth()).then(function (r) {

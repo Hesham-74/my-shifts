@@ -752,7 +752,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
     var wid = ui.slip.wid, sid = ui.slip.sid, st = state.staff[sid], sl = slipOf(wid, sid, true), pay = st.pay || {};
     if (ui.slip.preview) {
       var full = JSON.parse(JSON.stringify(sl)); full.fullName = pay.fullName || st.name; full.pps = pay.pps || ''; full.company = mainSet().company || '';
-      return '<section class="card">' + slipView(full) + '</section><button class="btn primary" data-act="slip-edit">Back to editing</button>';
+      return '<section class="card">' + slipView(full) + '</section>' + (fbOn() ? '<button class="btn" data-act="slip-pdf">' + (ui.slipPdfBusy ? 'Making the PDF…' : 'Download as PDF') + '</button>' : '') + '<button class="btn primary" data-act="slip-edit">Back to editing</button>';
     }
     var grid = function (list) { return '<div class="fields2">' + list.map(function (f) { return slIn(f[0], f[1], sl[f[0]], f[2]); }).join('') + '</div>'; };
     var h = '<section class="card nudge"><div><strong>' + esc(st.name) + '</strong><p class="hint">Week ' + esc(fShort.format(parse(wid)) + ' – ' + fShort.format(parse(addDays(wid, 6)))) + '. Look at the payslip from your payroll and copy the numbers into the same boxes here.</p></div><button class="btn" data-act="slip-close">Back</button></section>';
@@ -789,6 +789,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       h += '<section class="card"><h2 class="sec-title">Comments and notes</h2><div class="addform">' + slIn('comments', 'Comments', sl.comments, 'text') + slIn('notes', 'Notes', sl.notes, 'text') + '</div></section>';
     }
     h += '<section class="card"><div class="addform"><button class="btn" data-act="slip-preview">See it as the employee will</button>' +
+      (fbOn() ? '<button class="btn" data-act="slip-pdf">' + (ui.slipPdfBusy ? 'Making the PDF…' : 'Download as PDF') + '</button>' : '') +
       '<button class="btn' + (sl.ready ? '' : ' primary') + '" data-act="slip-ready">' + (sl.ready ? 'Ready to send ✓ (tap to hold it back)' : 'Finished: mark ready to send') + '</button>' +
       '<p class="hint">' + esc(slipWhen()) + '</p>' +
       '<button class="btn danger" data-act="slip-del">' + (ui.slip.delAsk ? 'Tap again to delete this payslip' : 'Delete this payslip') + '</button></div></section>';
@@ -806,6 +807,16 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       '<div class="row2"><label class="field"><span>Send every</span><select data-f="sl-day">' + o + '</select></label><label class="field"><span>At</span><select data-f="sl-hour">' + ho + '</select></label></div>' +
       '<p class="hint">On the chosen day, ready payslips appear in each employee’s app with a notification. You get a notification the day before (the daily reminder must be on for this phone).</p></div>';
   }
+  /* Save or share a PDF on the phone: the share sheet where the phone has one, a download otherwise. */
+  function savePdf(blob, name) {
+    try {
+      var f = new File([blob], name, { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [f] })) return navigator.share({ files: [f], title: name }).catch(function () {});
+    } catch (e) {}
+    var u = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = u; a.download = name; a.target = '_blank'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
+  }
   function slipAct(act, b) {
     var S = ui.slip;
     if (act === 'slip-copyall') {
@@ -819,6 +830,16 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
     if (act === 'slip-preview') { S.preview = true; render(); window.scrollTo(0, 0); return; }
     if (act === 'slip-edit') { S.preview = false; render(); return; }
     if (act === 'slip-more') { S.more = !S.more; render(); return; }
+    if (act === 'slip-pdf') {
+      if (ui.slipPdfBusy) return;
+      ui.slipPdfBusy = true; render();
+      var nm = 'Payslip-' + String((state.staff[S.sid].pay || {}).fullName || state.staff[S.sid].name).replace(/[^A-Za-z0-9]+/g, '-') + '-' + S.wid + '.pdf';
+      runSync(true).then(function () {
+        return fetch(API + 'payslip-pdf?wid=' + encodeURIComponent(S.wid) + '&sid=' + encodeURIComponent(S.sid), { headers: { 'Authorization': 'Bearer ' + netCfg().token }, cache: 'no-store' });
+      }).then(function (r) { if (!r.ok) throw new Error('pdf'); return r.blob(); }).then(function (bl) { ui.slipPdfBusy = false; render(); savePdf(bl, nm); },
+        function () { ui.slipPdfBusy = false; render(); toast('Could not make the PDF. Check your internet and try again.'); });
+      return;
+    }
     if (act === 'slip-calc') {
       var g = num(sl.gross), dd = 0; (sl.de || []).forEach(function (r) { if (!/emp.?er|employer/i.test(String(r.d || ''))) dd += num(r.v); });
       if (!g) { toast('Enter the Gross Pay first.'); return; }

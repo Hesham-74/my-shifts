@@ -2,6 +2,7 @@
 // "record today's hours" to the manager's phone(s).
 import webpush from 'web-push';
 import { storesFor, globalStore, allCompanies, phoneKey } from '../lib/tenant.mjs';
+import { payslipPdf, payslipFileName } from '../lib/payslip-pdf.mjs';
 
 async function send(subs, payload, v, subject) {
   let n = 0;
@@ -40,13 +41,20 @@ function slipEmail(sl, wid) {
     (sl.notes ? head('Notes') + '<p style="font:14px Arial,Helvetica,sans-serif;color:#14213a;margin:0">' + h(sl.notes) + '</p>' : '') +
     '<p style="font:12px Arial,Helvetica,sans-serif;color:#566580;margin:20px 0 0">Sent for ' + h(sl.company || 'your employer') + ' by My Shifts. The figures were entered by your employer. Questions about this payslip go to your employer.</p></div>';
 }
+// The payslip goes as a PDF attachment, with a short note in the email itself.
 async function mailSlip(to, sl, wid) {
   const key = process.env.RESEND_API_KEY;
   if (!key || !/^\S+@\S+\.\S+$/.test(String(to || ''))) return false;
   const name = String(sl.company || 'Payslips').replace(/[<>"\r\n]/g, '').slice(0, 60);
   try {
+    const pdf = await payslipPdf(sl, wid);
+    const html = '<div style="font:15px Arial,Helvetica,sans-serif;color:#14213a;max-width:520px;margin:0 auto;padding:16px">' +
+      '<p style="margin:0 0 12px">Hi ' + h(String(sl.fullName || '').split(' ')[0] || 'there') + ',</p>' +
+      '<p style="margin:0 0 12px">Your payslip for the week starting ' + h(wid) + ' is attached as a PDF.' + (sl.nett ? ' Nett pay: <strong>' + h(/^[0-9.,]+$/.test(String(sl.nett)) ? '€' + sl.nett : sl.nett) + '</strong>.' : '') + '</p>' +
+      '<p style="margin:0;color:#566580;font-size:13px">Sent for ' + h(sl.company || 'your employer') + ' by My Shifts. Questions about this payslip go to your employer.</p></div>';
     const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: name + ' <payslips@' + FROM_DOMAIN + '>', to: [String(to).trim()], subject: 'Your payslip, week starting ' + wid, html: slipEmail(sl, wid) }) });
+      body: JSON.stringify({ from: name + ' <payslips@' + FROM_DOMAIN + '>', to: [String(to).trim()], subject: 'Your payslip, week starting ' + wid, html,
+        attachments: [{ filename: payslipFileName(sl, wid), content: pdf.toString('base64') }] }) });
     return r.ok;
   } catch (e) { return false; }
 }

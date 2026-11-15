@@ -7,6 +7,7 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual, scrypt as scryptCb } from 'node:crypto';
 import webpush from 'web-push';
 import { storesFor, globalStore, phoneKey } from '../lib/tenant.mjs';
+import { payslipPdf, payslipFileName } from '../lib/payslip-pdf.mjs';
 
 const json = (o, status = 200) => new Response(JSON.stringify(o), {
   status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -561,6 +562,28 @@ export default async (req) => {
       const sc = await staffCtx(url.searchParams.get('phone'), url.searchParams.get('c')); if (sc.err) return sc.err; const k = sc.k;
       const a = await staffAuth(k); if (a !== 'ok') return denied(a);
       return json({ ok: true, list: (await slips.get(k, { type: 'json' })) || [] });
+    }
+
+    if (path === 'payslip-pdf' && req.method === 'GET') {
+      // A payslip as a PDF: the owner or a manager for anyone, an employee for their own released payslips.
+      const wid = String(url.searchParams.get('wid') || '');
+      if (!DATE.test(wid)) return json({ error: 'bad' }, 400);
+      let sl = null;
+      if (url.searchParams.get('phone')) {
+        const sc = await staffCtx(url.searchParams.get('phone'), url.searchParams.get('c')); if (sc.err) return sc.err;
+        const a = await staffAuth(sc.k); if (a !== 'ok') return denied(a);
+        const hit = ((await slips.get(sc.k, { type: 'json' })) || []).find((x) => x.wid === wid);
+        sl = hit ? hit.slip : null;
+      } else {
+        if (!(await signedIn('admin'))) return no();
+        const doc = await bak.get('latest', { type: 'json' }), sid = String(url.searchParams.get('sid') || '');
+        const raw = doc && doc.weeks && doc.weeks[wid] && doc.weeks[wid].slips ? doc.weeks[wid].slips[sid] : null, st = doc && doc.staff ? doc.staff[sid] : null;
+        const main = ((doc && doc.settings) || {}).main || {};
+        if (raw && st) sl = { ...raw, fullName: (st.pay && st.pay.fullName) || st.name, pps: (st.pay && st.pay.pps) || '', company: main.company || '' };
+      }
+      if (!sl) return json({ error: 'notfound' }, 404);
+      const pdf = await payslipPdf(sl, wid, { fullPps: true });
+      return new Response(pdf, { status: 200, headers: { 'content-type': 'application/pdf', 'content-disposition': 'inline; filename="' + payslipFileName(sl, wid) + '"', 'cache-control': 'no-store' } });
     }
 
     if (path === 'ask' && req.method === 'POST') {
