@@ -1519,32 +1519,31 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
   }
 
   /* ---------- weekly timetable ---------- */
+  /* Days go down, people go across: one row per day, one column per employee, totals on the right and at the bottom. */
   function ttBody(wid, rows) {
     var w = state.weeks[wid] || { shifts: [] }, cfg = cfgOf(wid), today = todayISO(), days = [];
     for (var i = 0; i < 7; i++) days.push(addDays(wid, i));
-    var h = '<thead><tr><th scope="col">Employee</th>' + days.map(function (d) {
-      return '<th scope="col"' + (d === today ? ' class="today"' : '') + '>' + fDay.format(parse(d)) + '<br>' + parse(d).getDate() + '</th>';
-    }).join('') + '<th scope="col">Total</th></tr></thead><tbody>';
-    var dayMins = days.map(function () { return 0; }), all = 0;
-    rows.forEach(function (r) {
-      h += '<tr><th scope="row">' + esc(r.name) + '</th>';
-      days.forEach(function (d, i) {
-        var cls = d === today ? ' class="today"' : '';
+    var h = '<thead><tr><th scope="col">Day</th>' + rows.map(function (r) { return '<th scope="col">' + esc(r.name) + '</th>'; }).join('') + '<th scope="col">Total</th></tr></thead><tbody>';
+    var all = 0;
+    days.forEach(function (d) {
+      var cls = d === today ? ' class="today"' : '', dayM = 0;
+      h += '<tr><th scope="row"' + cls + '>' + fDay.format(parse(d)) + ' ' + parse(d).getDate() + '</th>';
+      rows.forEach(function (r) {
         var list = (w.shifts || []).filter(function (s) { return s.sid === r.sid && s.date === d; })
           .sort(function (a, b) { return String(a.in).localeCompare(String(b.in)); });
         if (!list.length) { h += '<td' + cls + '>' + (isOff(wid, r.sid, d) ? '<span class="off">Off</span>' : '<span class="none">–</span>') + '</td>'; return; }
         var m = 0; list.forEach(function (s) { m += shiftMin(s, cfg); });
-        dayMins[i] += m;
+        dayM += m;
         h += '<td' + cls + '><b>' + fmtHM(m) + '</b>' + list.map(function (s) { return '<small>' + esc(s.in) + '–' + esc(s.out || '…') + '</small>'; }).join('') + '</td>';
       });
-      h += '<td><b>' + fmtHM(r.mins) + '</b></td></tr>';
-      all += r.mins;
+      all += dayM;
+      h += '<td' + cls + '><b>' + (dayM ? fmtHM(dayM) : '–') + '</b></td></tr>';
     });
-    return h + '</tbody><tfoot><tr><th scope="row">All</th>' + dayMins.map(function (m) { return '<td>' + (m ? fmtHM(m) : '–') + '</td>'; }).join('') + '<td>' + fmtHM(all) + '</td></tr></tfoot>';
+    return h + '</tbody><tfoot><tr><th scope="row">Total</th>' + rows.map(function (r) { return '<td>' + (r.mins ? fmtHM(r.mins) : '–') + '</td>'; }).join('') + '<td>' + fmtHM(all) + '</td></tr></tfoot>';
   }
   function timetableHTML(wid, rows) {
-    return '<section class="card"><h2 class="sec-title">Timetable</h2><div class="tt-wrap"><table class="tt" id="tt">' + ttBody(wid, rows) + '</table></div>' +
-      '<p class="hint" style="margin-top:8px">Hours worked each day with in and out times. Scroll sideways to see the whole week.</p></section>';
+    return '<section class="card"><h2 class="sec-title">Timetable</h2><div class="tt-wrap"><table class="tt" id="tt" style="min-width:' + (96 + (rows.length + 1) * 92) + 'px">' + ttBody(wid, rows) + '</table></div>' +
+      '<p class="hint" style="margin-top:8px">Hours each person worked, day by day, with in and out times. Scroll sideways to see everyone.</p></section>';
   }
 
   /* ---------- monthly report ---------- */
