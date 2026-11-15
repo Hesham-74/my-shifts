@@ -1,15 +1,25 @@
 {
-  "name": "Weekly Staff Pay",
-  "short_name": "Staff Pay",
-  "description": "Daily hours, weekly pay in euros, cash and bank split.",
+  "name": "My Shifts Manager",
+  "short_name": "My Shifts",
+  "description": "Rotas, hours, pay and payslips for restaurant teams.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#F3F5F9",
-  "theme_color": "#F3F5F9",
+  "background_color": "#0E1A2E",
+  "theme_color": "#0E1A2E",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
   ]
 }

@@ -4,16 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#F3F5F9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0E1420" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0E1A2E" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0C121D" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Staff Pay">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="My Shifts">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<title>Weekly Staff Pay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
+<title>My Shifts Manager</title>
 <style>
 html { -webkit-text-size-adjust: 100%; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 body { margin: 0; }
@@ -276,6 +279,129 @@ details > summary.btn::-webkit-details-marker { display: none; }
 .toast-in button { background: transparent; border: 0; color: var(--accent-soft); font-weight: 700; cursor: pointer; padding: 4px 2px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (prefers-reduced-motion: no-preference) { .toast-in { animation: up .18s ease-out; } @keyframes up { from { transform: translateY(8px); opacity: 0; } } }
+/* ===== My Shifts: premium theme =====
+   Layout: a dark brand header (business name, branch), the work in calm white cards on warm paper,
+   and a fixed app bar at the bottom for the six sections. Navy and brass are the brand; money totals
+   sit on a dark navy tile so the number that matters reads first. */
+:root {
+  --bg: #F4F2ED;
+  --surface: #FFFFFF;
+  --surface-2: #F1EEE7;
+  --ink: #101828;
+  --ink-2: #5E6573;
+  --line: #E6E2D9;
+  --accent: #14243F;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #EEF1F6;
+  --brand: #0E1A2E;
+  --brand-2: #1B2C49;
+  --brand-ink: #F5F1E6;
+  --brass: #B98A33;
+  --brass-soft: #F6EEDC;
+  --good: #1E7F55;
+  --bad: #B83A33;
+  --bad-soft: #F9E7E4;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 10px 28px -16px rgba(16, 24, 40, .28);
+  --font-body: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-num: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #090D14; --surface: #121925; --surface-2: #19212F; --ink: #EEF0F4; --ink-2: #9AA2B1; --line: #242D3C;
+    --accent: #D9B263; --accent-ink: #191206; --accent-soft: #231E14; --brand: #0C121D; --brand-2: #172235; --brand-ink: #F2ECDD;
+    --brass: #D9B263; --brass-soft: #2A2316; --good: #55C391; --bad: #F08A80; --bad-soft: #3A2124;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px -16px rgba(0, 0, 0, .7); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #090D14; --surface: #121925; --surface-2: #19212F; --ink: #EEF0F4; --ink-2: #9AA2B1; --line: #242D3C;
+  --accent: #D9B263; --accent-ink: #191206; --accent-soft: #231E14; --brand: #0C121D; --brand-2: #172235; --brand-ink: #F2ECDD;
+  --brass: #D9B263; --brass-soft: #2A2316; --good: #55C391; --bad: #F08A80; --bad-soft: #3A2124;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px -16px rgba(0, 0, 0, .7); color-scheme: dark;
+}
+body { background: var(--bg); font-size: 15px; -webkit-font-smoothing: antialiased; letter-spacing: -0.005em; }
+body::before { background: var(--brand); }
+.num, .tile b, .stats dd, .bank strong, .tt td b, .tt td small, .mstats dd, .hist-nums b, .chip b, .svtime, .svnext .big, .dr-head .hrs { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* brand header */
+.top { position: relative; background: linear-gradient(180deg, var(--brand) 0%, var(--brand-2) 100%); color: var(--brand-ink); border-bottom: 0; }
+.top-in { padding-block: 14px 16px; gap: 12px; }
+.bar { align-items: center; }
+.bar h1 { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: var(--brand-ink); min-width: 0; }
+.bar h1::before { content: ""; flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--brass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230E1A2E' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='5' width='16' height='15' rx='3'/%3E%3Cpath d='M8 3v4M16 3v4M8.5 13.5l2.5 2.5 4.5-5'/%3E%3C/svg%3E") center / 18px no-repeat; box-shadow: inset 0 1px 0 rgba(255,255,255,.35); }
+.status { color: rgba(245, 241, 230, .62); font-weight: 500; }
+.status.err { color: #FFB4A9; }
+.branchbar .field > span { color: rgba(245, 241, 230, .6); }
+.branchbar select { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .14); color: var(--brand-ink); border-radius: 12px; font-weight: 600; }
+.branchbar select option { color: #101828; }
+
+/* app bar at the bottom */
+.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; grid-template-columns: none; gap: 0; margin: 0;
+  padding: 6px max(8px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px));
+  background: color-mix(in srgb, var(--surface) 92%, transparent); -webkit-backdrop-filter: saturate(1.4) blur(14px); backdrop-filter: saturate(1.4) blur(14px);
+  border-top: 1px solid var(--line); border-radius: 0; box-shadow: 0 -8px 30px -18px rgba(16, 24, 40, .35); }
+.tab { display: grid; justify-items: center; gap: 3px; padding: 6px 0 4px; border-radius: 12px; font-size: 10.5px; font-weight: 700; letter-spacing: .01em; color: var(--ink-2); background: transparent; }
+.tab svg { width: 22px; height: 22px; display: block; }
+.tab[aria-selected="true"] { background: transparent; box-shadow: none; color: var(--ink); }
+.tab[aria-selected="true"] svg { color: var(--brass); }
+.tab[hidden] { display: none; }
+main { padding-block: 18px calc(110px + env(safe-area-inset-bottom, 0px)); gap: 14px; }
+.toast { bottom: calc(68px + env(safe-area-inset-bottom, 0px)); padding-bottom: 12px; }
+.toast-in { background: var(--brand); color: var(--brand-ink); border-radius: 14px; padding: 12px 16px; box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .45); }
+.toast-in button { color: var(--brass); }
+
+/* surfaces */
+.card, .tile { border-radius: 18px; border: 1px solid var(--line); box-shadow: var(--shadow); }
+.card { padding: 16px; }
+.sec-title { font-size: 11px; font-weight: 800; letter-spacing: .12em; color: var(--ink-2); }
+.nudge { background: var(--brass-soft); border-color: transparent; box-shadow: none; }
+.btn { border-radius: 12px; min-height: 44px; padding: 10px 16px; font-weight: 700; border: 1px solid var(--line); background: var(--surface); color: var(--ink); transition: transform .08s ease, box-shadow .15s ease; }
+.btn:active { transform: scale(.985); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 6px 16px -8px rgba(16, 24, 40, .55); }
+.btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 28%, var(--line)); }
+.icon { border-radius: 12px; width: 44px; height: 44px; background: var(--surface); }
+input[type="text"], input[type="number"], input[type="date"], input[type="time"], input[type="email"], input[type="password"], input[type="tel"], select {
+  background: var(--surface-2); border: 1px solid transparent; border-radius: 12px; min-height: 46px; padding: 10px 12px; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+input:focus, select:focus { outline: none; background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+.field > span { font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.weeklabel strong { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+
+/* totals: the money tile is the dark one */
+.tiles { gap: 10px; }
+.tile { padding: 14px; }
+.tile span { font-size: 11.5px; font-weight: 700; letter-spacing: .02em; }
+.tile b { font-family: var(--font-num); font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.tile.main { background: linear-gradient(150deg, var(--brand-2) 0%, var(--brand) 100%); border-color: transparent; color: var(--brand-ink); }
+.tile.main span { color: var(--brass); }
+.tile.main b { color: #FFFFFF; }
+
+/* people and pay */
+.pay-head h3, .dr-head h3 { font-size: 17px; font-weight: 800; letter-spacing: -0.015em; }
+.stats .total dd { font-weight: 800; }
+.split { border-top-style: solid; }
+.chip { border-radius: 12px; background: var(--surface-2); border-color: transparent; padding: 8px 0; }
+.chip[aria-pressed="true"] { background: var(--accent); }
+.dayrow.isoff { background: var(--surface-2); box-shadow: none; }
+.tt th.today { color: var(--brass); }
+.tt td.today { background: var(--brass-soft); }
+.svday.today { background: var(--brass-soft); }
+.staffrow .fields .coderow { background: var(--surface-2); border-radius: 14px; padding: 12px; }
+.hint.seen.ok { color: var(--good); }
+.slitem strong { font-weight: 800; }
+
+/* sign in */
+.authhero { display: grid; gap: 6px; justify-items: start; padding: 26px 4px 6px; }
+.authhero .mark { width: 56px; height: 56px; border-radius: 16px; background: var(--brass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230E1A2E' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='5' width='16' height='15' rx='3'/%3E%3Cpath d='M8 3v4M16 3v4M8.5 13.5l2.5 2.5 4.5-5'/%3E%3C/svg%3E") center / 32px no-repeat; box-shadow: 0 12px 30px -12px rgba(185, 138, 51, .7); margin-bottom: 10px; }
+.authhero h2 { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; text-wrap: balance; }
+.authhero p { color: var(--ink-2); font-size: 15px; max-width: 34ch; }
+.authcard { padding: 20px; gap: 14px; }
+.authh { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+.authpoints { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 10px; }
+.authpoints li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; font-size: 14px; color: var(--ink-2); }
+.authpoints li::before { content: ""; width: 22px; height: 22px; border-radius: 50%; background: var(--brass-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23B98A33' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center / 13px no-repeat; }
+.authfoot { text-align: center; font-size: 12px; color: var(--ink-2); padding: 6px 0 0; }
+@media (prefers-reduced-motion: no-preference) { main > * { animation: rise .22s ease-out both; } @keyframes rise { from { opacity: 0; transform: translateY(6px); } } }
 </style>
 </head>
 <body>
@@ -284,12 +410,12 @@ details > summary.btn::-webkit-details-marker { display: none; }
   <div class="top-in gut col">
     <div class="bar"><h1>Weekly Staff Pay</h1><span id="status" class="status" role="status"></span></div>
     <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
-      <button class="tab" role="tab" data-act="tab" data-tab="today" id="tab-today">Today</button>
-      <button class="tab" role="tab" data-act="tab" data-tab="week" id="tab-week">Week</button>
-      <button class="tab" role="tab" data-act="tab" data-tab="staff" id="tab-staff">Staff</button>
-      <button class="tab" role="tab" data-act="tab" data-tab="month" id="tab-month">Month</button>
-      <button class="tab" role="tab" data-act="tab" data-tab="slips" id="tab-slips">Payslips</button>
-      <button class="tab" role="tab" data-act="tab" data-tab="backup" id="tab-backup">Backup</button>
+      <button class="tab" role="tab" data-act="tab" data-tab="today" id="tab-today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8.5"/></svg><span>Today</span></button>
+      <button class="tab" role="tab" data-act="tab" data-tab="week" id="tab-week"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg><span>Week</span></button>
+      <button class="tab" role="tab" data-act="tab" data-tab="staff" id="tab-staff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.2 2.9-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.8" cy="9.2" r="2.5"/><path d="M15.6 14.3c2.3.1 4.2 1.7 4.9 4.7"/></svg><span>Staff</span></button>
+      <button class="tab" role="tab" data-act="tab" data-tab="month" id="tab-month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11M10 20V5M15 20v-6M20 20V9"/></svg><span>Month</span></button>
+      <button class="tab" role="tab" data-act="tab" data-tab="slips" id="tab-slips"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-3-1.8-3 1.8-3-1.8-3 1.8z"/><path d="M9 8.5h6M9 12h6M9 15.5h3.5"/></svg><span>Payslips</span></button>
+      <button class="tab" role="tab" data-act="tab" data-tab="backup" id="tab-backup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5a4.5 4.5 0 01-.6-8.96A6 6 0 0118 9a4 4 0 01-.5 9.5z"/><path d="M12 11v6M9.5 13.5L12 11l2.5 2.5"/></svg><span>Backup</span></button>
     </nav>
     <div id="branchbar" class="branchbar" hidden></div>
   </div>
@@ -351,7 +477,7 @@ details > summary.btn::-webkit-details-marker { display: none; }
   function setStatus(kind) {
     var map = {
       saving: ['Saving…', ''], saved: ['Saved', ''], cloud: ['', ''],
-      local: [memOnly ? 'Not saved: storage blocked' : 'Saved on this device', memOnly ? 'err' : ''],
+      local: [memOnly ? 'Not saved: storage blocked' : 'Saved', memOnly ? 'err' : ''],
       error: ['Could not save. Check your connection.', 'err']
     };
     var m = map[kind] || ['', ''];
@@ -776,7 +902,9 @@ details > summary.btn::-webkit-details-marker { display: none; }
     var m = ui.auth || 'login', legacy = fbOn() && !isAcct();
     var msg = '<p class="msg' + (ui.authErr ? ' err' : '') + '" role="status">' + esc(ui.authBusy ? 'One moment…' : ui.authMsg || '') + '</p>';
     var link = function (to, text) { return '<button class="btn" type="button" data-act="auth-mode" data-m="' + to + '">' + esc(text) + '</button>'; };
-    var h = '<section class="card authcard"><h2 class="authh">' + (m === 'signup' ? (legacy ? 'Move to your own account' : 'Create your business account') : m === 'forgot' ? 'Forgot your password' : m === 'reset' ? 'Set a new password' : 'Sign in') + '</h2>';
+    var hero = m === 'login' ? '<div class="authhero"><div class="mark" aria-hidden="true"></div><h2>Welcome back</h2><p>Rotas, hours, pay and payslips for your restaurant team, in one place.</p></div>'
+      : m === 'signup' && !legacy ? '<div class="authhero"><div class="mark" aria-hidden="true"></div><h2>Run your team’s week in minutes</h2><ul class="authpoints"><li>Record hours day by day, see pay, bank and cash per person</li><li>Staff see their own shifts and payslips on their phone</li><li>Branches, supervisors and reminders built in</li></ul></div>' : '';
+    var h = hero + '<section class="card authcard"><h2 class="authh">' + (m === 'signup' ? (legacy ? 'Move to your own account' : 'Create your business account') : m === 'forgot' ? 'Forgot your password' : m === 'reset' ? 'Set a new password' : 'Sign in') + '</h2>';
     if (m === 'signup') {
       h += (legacy ? '<p class="hint">Your records, staff and payslips move to this account. From now on you sign in with your email and password.</p>' : '<p class="hint">One account for your business. You add your branches, staff and supervisors after this.</p>') +
         '<form id="auth-f" class="addform" autocomplete="on">' + aIn('a-company', 'Business name', 'text', 'autocomplete="organization" placeholder="Pizza King"') + aIn('a-name', 'Your name', 'text', 'autocomplete="name"') +
@@ -797,7 +925,7 @@ details > summary.btn::-webkit-details-marker { display: none; }
         '<div class="authlinks">' + link('forgot', 'Forgot password') + link('signup', 'Create a business account') + '</div>' +
         '<p class="hint">Supervisors sign in with the email or phone number and password their manager gave them.</p>';
     }
-    return h + '</section>';
+    return h + '</section><p class="authfoot">My Shifts · Your records are private to your business.</p>';
   }
   /* Typed values live in memory only (never saved), so a refresh of the screen does not empty the form. */
   function keepDraft() { ui.authDraft = ui.authDraft || {}; Array.prototype.forEach.call(app.querySelectorAll('#auth-f input'), function (el) { ui.authDraft[el.id] = el.value; }); }
@@ -1274,7 +1402,7 @@ details > summary.btn::-webkit-details-marker { display: none; }
       document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
     });
   }
-  function render() { var tb = document.getElementById('tabs'), bb = document.getElementById('branchbar'), h1 = document.querySelector('.bar h1'); if (h1) h1.textContent = netCfg().company || 'Weekly Staff Pay'; if (needAuth()) { if (tb) tb.hidden = true; if (bb) { bb.hidden = true; bb.setAttribute('data-off', '1'); } app.innerHTML = authHTML(); return; } if (bb) bb.removeAttribute('data-off'); renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } applyRole(); branchBar(); }
+  function render() { var tb = document.getElementById('tabs'), bb = document.getElementById('branchbar'), h1 = document.querySelector('.bar h1'); if (h1) h1.textContent = netCfg().company || 'My Shifts'; if (needAuth()) { if (tb) tb.hidden = true; if (bb) { bb.hidden = true; bb.setAttribute('data-off', '1'); } app.innerHTML = authHTML(); return; } if (bb) bb.removeAttribute('data-off'); renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } applyRole(); branchBar(); }
   function renderCore() {
     var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
     if (tabsEl) tabsEl.hidden = sview || !roleKnown;
