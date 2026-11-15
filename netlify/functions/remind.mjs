@@ -3,6 +3,7 @@
 import webpush from 'web-push';
 import { storesFor, globalStore, allCompanies, phoneKey } from '../lib/tenant.mjs';
 import { payslipPdf, payslipFileName } from '../lib/payslip-pdf.mjs';
+import { rollAll } from '../lib/payslip-roll.mjs';
 
 async function send(subs, payload, v, subject) {
   let n = 0;
@@ -66,6 +67,18 @@ async function payslips(S, doc, v, subject) {
   if (!doc || st.slipDay === undefined || st.slipDay === '' || st.slipDay === null) return 'slips off';
   const now = localNow(st.tz), day = Number(st.slipDay), hour = Number(st.slipHour) || 0;
   if (now.hour !== hour) return 'slips wait';
+  // Payslips that repeat: the day before (and on the day, in case that was missed) last week's payslip is carried forward.
+  let rolled = 0;
+  if (now.dow === (day + 6) % 7 || now.dow === day) {
+    const payDay = now.dow === day ? now.day : new Date(now.date.getTime() + 86400000).toISOString().slice(0, 10);
+    rolled = rollAll(doc, payDay);
+    if (rolled) {
+      const meta = (await S.backup.get('meta', { type: 'json' })) || {}, at = new Date().toISOString();
+      doc.exportedAt = at;
+      await S.backup.setJSON('latest', doc);
+      await S.backup.setJSON('meta', { at, rev: (meta.rev || 0) + 1, by: 'auto' });
+    }
+  }
   const ready = [];
   Object.keys(doc.weeks || {}).forEach((wid) => { const sl = doc.weeks[wid].slips || {}; Object.keys(sl).forEach((sid) => { if (sl[sid] && sl[sid].ready && doc.staff[sid]) ready.push({ wid, sid, slip: sl[sid] }); }); });
   const store = S.payslips;
@@ -77,7 +90,7 @@ async function payslips(S, doc, v, subject) {
     let waiting = 0;
     for (const r of ready) { const k = phoneKey(doc.staff[r.sid].phone); if (k.length >= 7 && !(await listOf(k)).some((x) => x.wid === r.wid)) waiting++; }
     const rem = await cfg.get('remind', { type: 'json' });
-    await send(rem && rem.subs, { title: 'Weekly Staff Pay', body: waiting ? 'Tomorrow ' + waiting + (waiting === 1 ? ' payslip goes' : ' payslips go') + ' out to your staff. Check them today.' : 'Payslips go out tomorrow, but none is marked ready yet.', tag: 'slips' }, v, subject);
+    await send(rem && rem.subs, { title: 'My Shifts', body: waiting ? 'Tomorrow ' + waiting + (waiting === 1 ? ' payslip goes' : ' payslips go') + ' out to your staff' + (rolled ? ' (' + rolled + ' repeated from last week)' : '') + '. Check them today in the Payslips tab.' : 'Payslips go out tomorrow, but none is marked ready yet.', tag: 'slips' }, v, subject);
     await cfg.setJSON('slipnote', { day: now.day });
     return 'slips notice ' + waiting;
   }

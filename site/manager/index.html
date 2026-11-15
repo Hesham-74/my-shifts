@@ -416,6 +416,9 @@ details > summary.btn.danger { color: var(--bad); }
 .rolechip.r-manager { background: var(--accent-soft); color: var(--accent); }
 details.roles summary { cursor: pointer; font-weight: 700; }
 details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-2); display: grid; gap: 4px; }
+
+.tog { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; cursor: pointer; }
+.tog input { width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -739,7 +742,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       var sl = slipOf(wid, e[0], false), stt = sl ? (sl.ready ? 'ready' : 'started') : 'none';
       if (sl) n[stt]++; else if (slipPrev(wid, e[0])) canCopy++;
       return '<div class="slitem" data-sid="' + esc(e[0]) + '"><div><strong>' + esc(e[1].name) + '</strong><span class="hint seen' + (stt === 'ready' ? ' ok' : stt === 'started' ? ' wait' : '') + '">' +
-        (stt === 'ready' ? 'Ready to send' + (sl.nett ? ' · take-home ' + esc(sl.nett) : '') : stt === 'started' ? 'Started, not ready yet' : 'No payslip yet') + '</span></div>' +
+        (stt === 'ready' ? (sl.auto ? 'Repeated from last week' : 'Ready to send') + (sl.nett ? ' · take-home ' + esc(sl.nett) : '') : stt === 'started' ? 'Started, not ready yet' : 'No payslip yet') + '</span></div>' +
         '<button class="btn' + (stt === 'none' ? ' primary' : '') + '" data-act="slip-open">' + (stt === 'none' ? 'Add' : 'Open') + '</button></div>';
     }).join('');
     h += '<section class="card"><h2 class="sec-title">Employees</h2><div class="sllist">' + rows + '</div>' +
@@ -795,6 +798,30 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       '<button class="btn danger" data-act="slip-del">' + (ui.slip.delAsk ? 'Tap again to delete this payslip' : 'Delete this payslip') + '</button></div></section>';
     return h;
   }
+  /* Figures read from real payslips, prepared as a file. Each matches an employee by name (or PPS number). */
+  function importSlips(input) {
+    var file = input.files && input.files[0]; if (!file) return;
+    var rd = new FileReader();
+    rd.onload = function () {
+      var o; try { o = JSON.parse(String(rd.result)); } catch (e) { o = null; }
+      if (!o || o.app !== 'myshifts-payslips' || !Array.isArray(o.slips)) { toast('That file is not a My Shifts payslip file.'); return; }
+      var wid = /^\d{4}-\d{2}-\d{2}$/.test(o.week || '') ? mondayOf(o.week) : ui.wid, done = [], missed = [];
+      var key = function (x) { return String(x || '').toLowerCase().replace(/[^a-z0-9]/g, ''); };
+      o.slips.forEach(function (x) {
+        var sid = Object.keys(state.staff).filter(function (k) { var st = state.staff[k], p = st.pay || {}; return (x.pps && key(p.pps) === key(x.pps)) || key(st.name) === key(x.name) || (p.fullName && key(p.fullName) === key(x.fullName || x.name)); })[0];
+        if (!sid) { missed.push(x.name || x.fullName || '?'); return; }
+        var st = state.staff[sid]; st.pay = st.pay || {};
+        if (x.fullName) st.pay.fullName = x.fullName; if (x.pps) st.pay.pps = x.pps; if (x.email) st.pay.email = x.email;
+        queueSave('staff', sid, 0);
+        var sl = JSON.parse(JSON.stringify(x.slip || {})); sl.ready = true; delete sl.auto;
+        var w = ensureWeek(wid); w.slips = w.slips || {}; w.slips[sid] = sl; done.push(st.name);
+      });
+      if (done.length) queueSave('weeks', wid, 0);
+      ui.wid = wid; input.value = ''; render();
+      toast('Imported ' + done.length + (done.length === 1 ? ' payslip' : ' payslips') + (missed.length ? '. Not found: ' + missed.join(', ') : '.'));
+    };
+    rd.readAsText(file);
+  }
   var DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   function slipWhen() { var m = mainSet(); return m.slipDay === undefined || m.slipDay === '' || m.slipDay === null ? 'Weekly sending is off.' : 'Sent every ' + DOW[Number(m.slipDay)] + ' at ' + pad(Number(m.slipHour) || 0) + ':00.'; }
   function slipSetHTML() {
@@ -805,6 +832,8 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
     return '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>Payslips</strong>' +
       '<label class="field"><span>Company name on payslips</span><input type="text" data-f="sl-company" value="' + esc(m.company || '') + '" autocomplete="off"></label>' +
       '<div class="row2"><label class="field"><span>Send every</span><select data-f="sl-day">' + o + '</select></label><label class="field"><span>At</span><select data-f="sl-hour">' + ho + '</select></label></div>' +
+      '<label class="tog"><input type="checkbox" data-f="sl-auto"' + (m.slipAuto === false ? '' : ' checked') + '><span><strong>Repeat payslips every week</strong><br><span class="hint">The day before sending, each person’s last payslip is carried into the new week: same weekly figures, next period, totals to date moved on. Change anyone whose pay changed.</span></span></label>' +
+      '<label class="field"><span>Import payslip figures (a file from My Shifts support)</span><input type="file" accept=".json,application/json" data-f="sl-import"></label>' +
       '<p class="hint">On the chosen day, ready payslips appear in each employee’s app with a notification. You get a notification the day before (the daily reminder must be on for this phone).</p></div>';
   }
   /* Save or share a PDF on the phone: the share sheet where the phone has one, a download otherwise. */
@@ -853,6 +882,8 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
     queueSave('weeks', S.wid, 0); render();
   }
   function slipInput(f, t) {
+    if (f === 'sl-auto') { mainSet().slipAuto = !!t.checked; queueSave('settings', 'main', 0); toast(t.checked ? 'Payslips will repeat every week.' : 'Payslips will no longer repeat by themselves.'); return true; }
+    if (f === 'sl-import') { importSlips(t); return true; }
     if (f === 'sl-company' || f === 'sl-day' || f === 'sl-hour') {
       var m = mainSet();
       if (f === 'sl-company') m.company = t.value.trim(); else if (f === 'sl-day') m.slipDay = t.value === '' ? '' : Number(t.value); else m.slipHour = Number(t.value) || 0;
