@@ -1,5 +1,5 @@
 /* Offline cache for Weekly Staff Pay. Bump CACHE when the app files change. */
-const CACHE = 'staff-pay-v20';
+const CACHE = 'staff-pay-v21';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

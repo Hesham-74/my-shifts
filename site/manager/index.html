@@ -419,6 +419,38 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
 
 .tog { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; cursor: pointer; }
 .tog input { width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--accent); }
+
+/* staff list */
+.staffrow { gap: 0; padding: 0; overflow: hidden; }
+.staffrow > .fields, .staffrow > .foot { padding: 0 16px 16px; }
+.staffrow > .fields { padding-top: 4px; }
+.staffrow.collapsed > .fields, .staffrow.collapsed > .foot { display: none; }
+.srow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%; padding: 14px 16px; background: transparent; border: 0; text-align: left; cursor: pointer; color: inherit; }
+.srow .av { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-weight: 800; background: var(--brass-soft); color: var(--brass); font-size: 16px; }
+.srow .sname { display: grid; gap: 1px; min-width: 0; }
+.srow .sname strong { font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
+.srow .chev { width: 18px; height: 18px; color: var(--ink-2); transition: transform .15s ease; }
+.srow[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.chips2 { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.chips2:empty { display: none; }
+.chip2 { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); }
+.chip2.warn2 { background: var(--bad-soft); color: var(--bad); }
+.searchbox input { background: var(--surface); border: 1px solid var(--line); }
+.introhint { order: 99; }
+/* getting started */
+.startcard { display: grid; gap: 12px; background: linear-gradient(150deg, var(--brand-2), var(--brand)); color: var(--brand-ink); border-color: transparent; }
+.startcard .hint { color: rgba(245, 241, 230, .7); display: block; }
+.startcard .btn { background: rgba(255,255,255,.08); color: var(--brand-ink); border-color: rgba(255,255,255,.18); min-height: 36px; padding: 6px 12px; }
+.sc-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.sc-head strong { font-size: 17px; font-weight: 800; }
+.sc-bar { height: 6px; border-radius: 99px; background: rgba(255,255,255,.12); overflow: hidden; }
+.sc-bar i { display: block; height: 100%; background: var(--brass); border-radius: 99px; }
+.sc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.sc-list button { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font-weight: 600; padding: 9px 0 9px 32px; position: relative; cursor: pointer; }
+.sc-list button::before { content: ""; position: absolute; left: 0; top: 50%; width: 20px; height: 20px; margin-top: -10px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); box-sizing: border-box; }
+.sc-list li.done button { color: rgba(245, 241, 230, .55); text-decoration: line-through; }
+.sc-list li.done button::before { background: var(--brass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230E1A2E' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center / 12px no-repeat; border-color: var(--brass); }
+a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -432,7 +464,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       <button class="tab" role="tab" data-act="tab" data-tab="staff" id="tab-staff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.2 2.9-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.8" cy="9.2" r="2.5"/><path d="M15.6 14.3c2.3.1 4.2 1.7 4.9 4.7"/></svg><span>Staff</span></button>
       <button class="tab" role="tab" data-act="tab" data-tab="month" id="tab-month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11M10 20V5M15 20v-6M20 20V9"/></svg><span>Month</span></button>
       <button class="tab" role="tab" data-act="tab" data-tab="slips" id="tab-slips"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-3-1.8-3 1.8-3-1.8-3 1.8z"/><path d="M9 8.5h6M9 12h6M9 15.5h3.5"/></svg><span>Payslips</span></button>
-      <button class="tab" role="tab" data-act="tab" data-tab="backup" id="tab-backup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5a4.5 4.5 0 01-.6-8.96A6 6 0 0118 9a4 4 0 01-.5 9.5z"/><path d="M12 11v6M9.5 13.5L12 11l2.5 2.5"/></svg><span>Backup</span></button>
+      <button class="tab" role="tab" data-act="tab" data-tab="backup" id="tab-backup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg><span>Settings</span></button>
     </nav>
     <div id="branchbar" class="branchbar" hidden></div>
   </div>
@@ -931,7 +963,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
   function branchBar() {
     var el = document.getElementById('branchbar'); if (!el) return;
     var l = branchList(), c = curBranch();
-    el.hidden = !l.length || el.getAttribute('data-off') === '1';
+    el.hidden = !l.length || el.getAttribute('data-off') === '1' || ui.tab === 'backup';
     el.innerHTML = '<label class="field"><span>Branch</span><select id="br-sel" data-f="br-sel"><option value="">All branches</option>' +
       l.map(function (e) { return '<option value="' + esc(e[0]) + '"' + (e[0] === c ? ' selected' : '') + '>' + esc(e[1].name) + '</option>'; }).join('') + '</select></label>';
   }
@@ -969,8 +1001,8 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       var box = el.closest('.tile, .stats > div, .hist-nums > div, td, th') || el; box.hidden = true;
     });
     Array.prototype.forEach.call(app.querySelectorAll('th'), function (el) { if (/pay|cash|bank|€/i.test(el.textContent)) el.hidden = true; });
-    ['tab-backup', 'tab-slips'].forEach(function (id) { var bt = document.getElementById(id); if (bt) bt.hidden = true; });
-    if (ui.tab === 'backup' || ui.tab === 'slips') { ui.tab = 'today'; render(); }
+    ['tab-slips'].forEach(function (id) { var bt = document.getElementById(id); if (bt) bt.hidden = true; });
+    if (ui.tab === 'slips') { ui.tab = 'today'; render(); }
   }
   /* ---------- accounts: every business signs in with its own email (or phone) and password ---------- */
   function isAcct() { return fbOn() && !!netCfg().acct; }
@@ -1155,11 +1187,11 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
   }
   function publishHTML() {
     var f = netCfg(), on = fbOn();
-    var h = '<section class="card"><h2 class="sec-title">Staff app and online backup</h2><div class="addform">';
+    var h = '<section class="card"><h2 class="sec-title">Staff app, notifications and backup</h2><div class="addform">';
     if (on) {
       h += '<p><strong>Signed in as ' + (ROLE_LABEL[netCfg().role] || 'Owner') + '.</strong> <span class="hint">Staff app: ' + esc(location.origin) + '/</span></p>' +
         '<p id="fb-status" class="msg' + (f.err ? ' err' : '') + '" role="status">' + esc(netStatusLine()) + '</p>' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Send now</button>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Save online now</button>' +
         '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
         '<button class="btn" data-act="fb-nudge">Remind all staff to check their times</button>' +
         remindHTML() + supHTML() +
@@ -1223,6 +1255,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
   }
 
   function fbAct(act, b) {
+    if (enhanceAct(act, b)) return;
     if (/^(auth|team|acct)-/.test(act)) { teamAct(act, b); return; }
     if (act.indexOf('slip-') === 0) { if (!isSup()) slipAct(act, b); return; }
     if (act === 'code-send') {
@@ -1316,6 +1349,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
   function fbInput(f, t) {
     if (slipInput(f, t)) return true;
     if (f === 'fb-pw') { ui.netPw = t.value; return true; }
+    if (f === 'staff-q') { ui.staffQ = t.value; filterStaff(); return true; }
     if (f === 'fb-hour' || f === 'sup-pw' || f === 'br-new' || f === 't-in') return true;
     if (f === 'team-role') {
       var uidT = t.closest('[data-uid]').getAttribute('data-uid'), roleT = t.value;
@@ -1332,6 +1366,99 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
     return false;
   }
 
+
+  /* ---------- Settings tab: account, people, branches, staff app, backups, help ---------- */
+  function settingsHTML() {
+    var h = accountHTML() || '';
+    h += publishHTML();
+    if (!isSup()) h += branchesHTML() + '<section class="card"><h2 class="sec-title">Backups</h2><p class="hint" style="margin-bottom:10px">Your records are saved online after every change. You can also keep a copy as a file.</p></section>' + backupHTML();
+    h += '<section class="card"><h2 class="sec-title">Help</h2><div class="addform"><a class="btn" href="/support/">Help and contact</a><a class="btn" href="/privacy/">Privacy policy</a><a class="btn" href="/terms/">Terms of use</a></div></section>';
+    return h;
+  }
+
+  /* ---------- Staff tab: a tidy list; tap a person to open their details ---------- */
+  function staffChips(s) {
+    var c = [];
+    if (activeLeave(s)) c.push('<span class="chip2 warn2">On leave</span>');
+    if (branchList().length > 1 && !curBranch()) { var b = state.branches[branchOfStaff(s)]; if (b) c.push('<span class="chip2">' + esc(b.name) + '</span>'); }
+    if (fbOn() && phoneKey(s.phone).length < 7) c.push('<span class="chip2 warn2">No phone</span>');
+    var st = netRun.status && netRun.status[phoneKey(s.phone)];
+    if (st && st.ask) c.push('<span class="chip2 warn2">Says hours missing</span>');
+    else if (st && !st.pin) c.push('<span class="chip2">App not set up</span>');
+    return c.join('');
+  }
+  function enhanceStaff() {
+    if (ui.tab !== 'staff') return;
+    ui.staffOpen = ui.staffOpen || {};
+    var rows = app.querySelectorAll('.staffrow[data-sid]');
+    if (rows.length > 6 && !app.querySelector('#staff-q')) {
+      var first = rows[0];
+      first.insertAdjacentHTML('beforebegin', '<label class="field searchbox"><span class="sr">Find an employee</span><input type="search" id="staff-q" data-f="staff-q" placeholder="Find an employee" value="' + esc(ui.staffQ || '') + '" autocomplete="off"></label>');
+    }
+    Array.prototype.forEach.call(rows, function (row) {
+      var sid = row.getAttribute('data-sid'), s = state.staff[sid]; if (!s) return;
+      var open = !!ui.staffOpen[sid] || ui.confirmRm === sid || ui.leaveAsk === sid || ui.pinReset === sid;
+      row.classList.toggle('collapsed', !open);
+      row.insertAdjacentHTML('afterbegin', '<button class="srow" data-act="staff-toggle" aria-expanded="' + open + '"><span class="av">' + esc((s.name || '?').trim().charAt(0).toUpperCase()) + '</span>' +
+        '<span class="sname"><strong>' + esc(s.name) + '</strong><span class="hint">' + esc(s.position || 'No position') + '</span><span class="chips2">' + staffChips(s) + '</span></span>' +
+        '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>');
+    });
+    filterStaff();
+    var intro = app.querySelector('main > p.hint, #app > p.hint'); if (intro && /Bank amount is the fixed part/.test(intro.textContent)) intro.classList.add('introhint');
+  }
+  function filterStaff() {
+    var q = String(ui.staffQ || '').trim().toLowerCase();
+    Array.prototype.forEach.call(app.querySelectorAll('.staffrow[data-sid]'), function (row) {
+      var s = state.staff[row.getAttribute('data-sid')]; row.hidden = !!q && !(s && (String(s.name).toLowerCase().indexOf(q) > -1 || String(s.position || '').toLowerCase().indexOf(q) > -1));
+    });
+  }
+
+  /* ---------- Getting started: a short checklist for a new business ---------- */
+  function startHTML() {
+    if (isSup() || !fbOn() || getSettings().startDone) return '';
+    var staff = Object.keys(state.staff).map(function (k) { return state.staff[k]; }).filter(function (s) { return !activeLeave(s); });
+    var st = netRun.status || {}, m = mainSet(), rem = (netCfg().remind || {}).on;
+    var steps = [
+      [staff.length > 0, 'Add your staff and their hourly rates', 'staff'],
+      [staff.length > 0 && staff.every(function (s) { return phoneKey(s.phone).length >= 7; }), 'Add each person’s phone number', 'staff'],
+      [Object.keys(st).some(function (k) { return st[k].pin; }), 'Send your staff the app link', 'staff'],
+      [!!rem, 'Turn on your daily reminder', 'backup'],
+      [m.slipDay !== undefined && m.slipDay !== '' && m.slipDay !== null, 'Choose your payslip day (optional)', 'slips']
+    ];
+    var done = steps.filter(function (x) { return x[0]; }).length;
+    if (done === steps.length) return '';
+    return '<section class="card startcard" id="startcard"><div class="sc-head"><div><strong>Get set up</strong><span class="hint">' + done + ' of ' + steps.length + ' done</span></div><button class="btn" data-act="start-hide">Hide</button></div>' +
+      '<div class="sc-bar"><i style="width:' + Math.round(done / steps.length * 100) + '%"></i></div><ol class="sc-list">' + steps.map(function (x) {
+        return '<li class="' + (x[0] ? 'done' : '') + '"><button data-act="tab" data-tab="' + x[2] + '">' + esc(x[1]) + '</button></li>';
+      }).join('') + '</ol></section>';
+  }
+
+  /* ---------- Month tab: download the month as a spreadsheet ---------- */
+  function monthExportHTML() {
+    if (isSup() || ui.tab !== 'month') return '';
+    return '<button class="btn" data-act="month-csv" id="month-csv">Download this month as a spreadsheet</button>';
+  }
+  function monthCsv() {
+    var st = monthStats(ui.month), q = function (v) { v = String(v === undefined || v === null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var rows = [['Employee', 'Position', 'Days worked', 'Days off', 'Hours', 'Total pay (EUR)', 'Bank (EUR)', 'Cash (EUR)']];
+    st.list.forEach(function (o) { rows.push([o.name, o.position, o.daysN, o.offN, fmtHM(o.mins), o.total.toFixed(2), o.bank.toFixed(2), o.cash.toFixed(2)]); });
+    rows.push(['Total', '', '', '', fmtHM(st.T.mins), st.T.total.toFixed(2), st.T.bank.toFixed(2), st.T.cash.toFixed(2)]);
+    var name = (netCfg().company || 'My Shifts').replace(/[^A-Za-z0-9]+/g, '-') + '-' + ui.month + (curBranch() ? '-' + state.branches[curBranch()].name.replace(/[^A-Za-z0-9]+/g, '-') : '') + '.csv';
+    var blob = new Blob(['﻿' + rows.map(function (r) { return r.map(q).join(','); }).join('\r\n')], { type: 'text/csv' });
+    savePdf(blob, name);
+  }
+
+  function enhance() {
+    enhanceStaff();
+    if (ui.tab === 'today') { var sc = startHTML(); if (sc) app.insertAdjacentHTML('afterbegin', sc); }
+    if (ui.tab === 'month' && !isSup()) app.insertAdjacentHTML('beforeend', monthExportHTML());
+  }
+  function enhanceAct(act, b) {
+    if (act === 'staff-toggle') { var sid = cardSid(b); ui.staffOpen = ui.staffOpen || {}; ui.staffOpen[sid] = !ui.staffOpen[sid]; var row = b.closest('.staffrow'); row.classList.toggle('collapsed', !ui.staffOpen[sid]); b.setAttribute('aria-expanded', String(!!ui.staffOpen[sid])); return true; }
+    if (act === 'start-hide') { setSetting('startDone', true); var c = document.getElementById('startcard'); if (c) c.remove(); return true; }
+    if (act === 'month-csv') { monthCsv(); return true; }
+    return false;
+  }
   function svClose() { if (sv.unsub) { sv.unsub(); sv.unsub = null; } }
   function svReset() { svClose(); sv.state = 'idle'; sv.data = null; sv.code = ''; sv.msg = ''; }
   function svOpen(code) {
@@ -1532,7 +1659,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
     });
   }
-  function render() { var tb = document.getElementById('tabs'), bb = document.getElementById('branchbar'), h1 = document.querySelector('.bar h1'); if (h1) h1.textContent = netCfg().company || 'My Shifts'; if (needAuth()) { if (tb) tb.hidden = true; if (bb) { bb.hidden = true; bb.setAttribute('data-off', '1'); } app.innerHTML = authHTML(); return; } if (bb) bb.removeAttribute('data-off'); renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } pendingShow(); applyRole(); branchBar(); }
+  function render() { var tb = document.getElementById('tabs'), bb = document.getElementById('branchbar'), h1 = document.querySelector('.bar h1'); if (h1) h1.textContent = netCfg().company || 'My Shifts'; if (needAuth()) { if (tb) tb.hidden = true; if (bb) { bb.hidden = true; bb.setAttribute('data-off', '1'); } app.innerHTML = authHTML(); return; } if (bb) bb.removeAttribute('data-off'); renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } enhance(); pendingShow(); applyRole(); branchBar(); }
   function renderCore() {
     var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
     if (tabsEl) tabsEl.hidden = sview || !roleKnown;
@@ -1543,7 +1670,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       app.innerHTML = '<p class="muted">Loading your staff and weeks…</p>' + (ui.slow ? '<p class="hint">This is taking longer than usual. Saved data may not be reachable yet.</p>' : '');
       return;
     }
-    app.innerHTML = ui.tab === 'today' ? dayHTML() : ui.tab === 'week' ? weekHTML() : ui.tab === 'staff' ? staffHTML() : ui.tab === 'backup' ? backupHTML() : ui.tab === 'slips' ? slipsTabHTML() : monthHTML();
+    app.innerHTML = ui.tab === 'today' ? dayHTML() : ui.tab === 'week' ? weekHTML() : ui.tab === 'staff' ? staffHTML() : ui.tab === 'backup' ? settingsHTML() : ui.tab === 'slips' ? slipsTabHTML() : monthHTML();
   }
 
   function weekHTML() {
@@ -1644,7 +1771,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       '<label class="field"><span>€ per hour</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="ns-rate" value="' + esc(ui.newStaff.rate) + '" placeholder="0.00"></label></div>' +
       '<label class="field"><span>Bank amount per week (€)</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="ns-bank" value="' + esc(ui.newStaff.bank) + '" placeholder="0.00"></label>' +
       '<button class="btn primary" data-act="add-staff">Add employee</button><p class="msg err" role="status">' + esc(ui.staffMsg) + '</p></div></section>';
-    h += branchesHTML() + publishHTML() + accountHTML();
+
     return h;
   }
 
@@ -1921,7 +2048,7 @@ details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color
       sortedStaff().filter(function (e) { return !onLeave(e[1], ui.day); }).forEach(function (e) { if (!findShift(dayWid(), e[0], ui.day) && !isOff(dayWid(), e[0], ui.day)) { var u2 = usualFor(e[0]); setDayTimes(e[0], u2.inT, u2.outT); } });
       refreshDay();
     }
-    else if (/^(code|fb|sup|br|leave|slip|auth|team|acct)-/.test(act)) fbAct(act, b);
+    else if (/^(code|fb|sup|br|leave|slip|auth|team|acct|staff|start|month)-/.test(act)) fbAct(act, b);
     else if (act === 'bk-email') backupEmail();
     else if (act === 'bk-save') { if (downloadBackup()) { markBackup(); ui.bkMsg = 'Backup file saved to your phone.'; ui.bkErr = false; } else { ui.bkMsg = 'Could not create the backup file.'; ui.bkErr = true; } render(); }
     else if (act === 'bk-restore-yes') restoreApply();
