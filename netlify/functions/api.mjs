@@ -33,6 +33,15 @@ async function sendMail(to, subject, html) {
 }
 const hashOf = (token, salt) => createHash('sha256').update(salt + ':' + token).digest('hex');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Run fn over items a few at a time and keep the results in the same order as the items.
+// Reads that used to wait for one another now overlap, so a request with many staff finishes much sooner.
+const LIMIT = 8;
+async function inTurn(items, fn, limit = LIMIT) {
+  const out = new Array(items.length); let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 const DATE = /^\d{4}-\d{2}-\d{2}$/, TIME = /^\d{2}:\d{2}$/;
 
 // Keep only what an employee may see, whatever the manager app sent.
@@ -104,14 +113,15 @@ export default async (req) => {
     return sent;
   };
   const statusOf = async (keys) => {
+    // The same five records per person as before, read side by side instead of one after another.
+    const rows = await inTurn(keys, async (k) => {
+      const [d, sn, sl0, ak, pin] = await Promise.all([sch.get(k, { type: 'json' }), seen.get(k, { type: 'json' }), subs.get(k, { type: 'json' }), asks.get(k, { type: 'json' }), pins.get(k, { type: 'json' })]);
+      if (!d) return null;
+      const sl = sl0 || [];
+      return { ask: ak ? ak.at : null, pin: !!pin, chg: d.chg || null, seen: sn && sn.upd === d.upd ? sn.at : null, lastSeen: sn ? sn.at : null, push: sl.length > 0 };
+    });
     const out = {};
-    for (const k of keys) {
-      const d = await sch.get(k, { type: 'json' }); if (!d) continue;
-      const sn = await seen.get(k, { type: 'json' });
-      const sl = (await subs.get(k, { type: 'json' })) || [];
-      const ak = await asks.get(k, { type: 'json' });
-      out[k] = { ask: ak ? ak.at : null, pin: !!(await pins.get(k, { type: 'json' })), chg: d.chg || null, seen: sn && sn.upd === d.upd ? sn.at : null, lastSeen: sn ? sn.at : null, push: sl.length > 0 };
-    }
+    keys.forEach((k, i) => { if (rows[i]) out[k] = rows[i]; });
     return out;
   };
 
@@ -149,8 +159,10 @@ export default async (req) => {
     if (k.length < 7) return null;
     if (c) return CID.test(c) && (await storesFor(c).schedules.get(k, { type: 'json' })) ? c : null;
     const found = [];
-    for (const x of ((await G.phones.get(k, { type: 'json' })) || [])) if (CID.test(x) && found.indexOf(x) < 0 && (await storesFor(x).schedules.get(k, { type: 'json' }))) found.push(x);
-    if (found.indexOf('legacy') < 0 && (await storesFor('legacy').schedules.get(k, { type: 'json' }))) found.push('legacy');
+    const ix = ((await G.phones.get(k, { type: 'json' })) || []).filter((x, i, a) => CID.test(x) && a.indexOf(x) === i);
+    const cand = ix.indexOf('legacy') < 0 ? ix.concat(['legacy']) : ix;
+    const has = await inTurn(cand, async (x) => !!(await storesFor(x).schedules.get(k, { type: 'json' })));
+    cand.forEach((x, i) => { if (has[i]) found.push(x); });
     return found.length === 1 ? found[0] : found.length ? found : null;
   };
   const staffCtx = async (phone, c) => {
@@ -204,8 +216,8 @@ export default async (req) => {
   };
   const pwOK = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 200;
 
-  const sharedState = async () => {
-    const meta = (await bak.get('meta', { type: 'json' })) || {};
+  const sharedState = async (known) => {
+    const meta = known || (await bak.get('meta', { type: 'json' })) || {};
     const doc = await bak.get('latest', { type: 'json' });
     return { rev: meta.rev || 0, staff: doc ? doc.staff : {}, weeks: doc ? doc.weeks : {}, branches: doc && doc.branches ? doc.branches : {}, settings: doc && doc.settings ? doc.settings : {}, has: !!doc };
   };
@@ -247,7 +259,9 @@ export default async (req) => {
       let keys;
       if (body.phone) keys = [phoneKey(body.phone)]; else keys = (await sch.list()).blobs.map((b) => b.key);
       let sent = 0, off = 0;
-      for (const k of keys) { const n = await notify(k, 'Your manager asks you to check your work times.'); if (n) sent++; else off++; }
+      await vapid();   // make sure the notification key exists before people are notified side by side
+      const res = await inTurn(keys, (k) => notify(k, 'Your manager asks you to check your work times.'));
+      res.forEach((n) => { if (n) sent++; else off++; });
       return json({ ok: true, sent, off });
     }
 
@@ -465,32 +479,35 @@ export default async (req) => {
       if (role === 'supervisor' && !cur.has) return json({ error: 'nodata' }, 409);
       const want = {};
       Object.keys(body.schedules || {}).slice(0, 300).forEach((p) => { const k = phoneKey(p); if (k.length >= 7 && !want[k]) want[k] = cleanSchedule(body.schedules[p]); });
+      // Same records read and written as before; people are handled side by side (each person's own steps stay in order).
       const { blobs } = await sch.list();
-      for (const b of blobs) if (!want[b.key]) {
+      await inTurn(blobs.filter((b) => !want[b.key]), async (b) => {
         await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); await pins.delete(b.key); await asks.delete(b.key);
         const ix = ((await G.phones.get(b.key, { type: 'json' })) || []).filter((x) => x !== cid);
         if (ix.length) await G.phones.setJSON(b.key, ix); else await G.phones.delete(b.key);
-      }
+      });
       const had = {}; blobs.forEach((b) => { had[b.key] = 1; });
-      for (const k of Object.keys(want)) {
+      const wantKeys = Object.keys(want);
+      await inTurn(wantKeys, async (k) => {
         const ix = (await G.phones.get(k, { type: 'json' })) || [];
         if (ix.indexOf(cid) < 0) await G.phones.setJSON(k, ix.concat([cid]));
-      }
+      });
       const now = new Date().toISOString();
       const today = DATE.test(body.today) ? body.today : now.slice(0, 10);
       let notified = 0; const pend = {};
-      for (const k of Object.keys(want)) {
+      const ahead = await inTurn(wantKeys, async (k) => {
         const prev = await sch.get(k, { type: 'json' });
         const next = want[k];
-        if (prev && fullSig(prev) === fullSig(next)) continue;            // nothing changed for this person
+        if (prev && fullSig(prev) === fullSig(next)) return false;        // nothing changed for this person
         next.upd = now;
         next.chg = prev ? prev.chg || null : null;
         const changedAhead = prev ? futureSig(prev, today) !== futureSig(next, today) : (next.shifts.some((x) => x.d >= today) || next.off.some((d) => d >= today));
         if (changedAhead) { next.chg = now; }
         await sch.setJSON(k, next);
         await asks.delete(k);
-        if (changedAhead && prev) pend[k] = 1;   // told later: when the manager taps Send, or 30 minutes after the last change
-      }
+        return !!(changedAhead && prev);
+      });
+      wantKeys.forEach((k, i) => { if (ahead[i]) pend[k] = 1; });   // told later: when the manager taps Send, or 30 minutes after the last change
       let backedUp = false;
       const bk = body.backup;
       let rev = cur.rev;
@@ -531,8 +548,10 @@ export default async (req) => {
     if (path === 'data' && req.method === 'GET') {
       if (!(await signedIn())) return no();
       const role = me.role;
-      const cur = await sharedState();
-      if (String(cur.rev) === url.searchParams.get('rev')) return json({ ok: true, same: true, rev: cur.rev, role });
+      // Most polls find nothing new: answer those from the small "meta" record without loading all the records.
+      const meta0 = (await bak.get('meta', { type: 'json' })) || {};
+      if (String(meta0.rev || 0) === url.searchParams.get('rev')) return json({ ok: true, same: true, rev: meta0.rev || 0, role });
+      const cur = await sharedState(meta0);
       const coRec = (await G.companies.get(cid, { type: 'json' })) || {};
       return json({ ok: true, rev: cur.rev, role, company: coRec.name || '', has: cur.has, ...(role === 'supervisor' ? noMoney(cur) : { staff: cur.staff, weeks: cur.weeks, branches: cur.branches, settings: cur.settings }) });
     }
@@ -548,7 +567,10 @@ export default async (req) => {
       if (!(await signedIn())) return no();
       const pq = (await cfg.get('pending', { type: 'json' })) || { keys: {} };
       let sent = 0, people = 0;
-      for (const k of Object.keys(pq.keys || {})) { people++; try { if (await notify(k)) sent++; } catch (e) { /* next person */ } }
+      const ks = Object.keys(pq.keys || {}); people = ks.length;
+      if (ks.length) await vapid();
+      const res = await inTurn(ks, async (k) => { try { return await notify(k); } catch (e) { return 0; } });
+      res.forEach((n) => { if (n) sent++; });
       await cfg.setJSON('pending', { keys: {}, last: null, sentAt: Date.now() });
       return json({ ok: true, people, sent });
     }

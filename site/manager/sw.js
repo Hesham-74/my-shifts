@@ -1,5 +1,5 @@
 /* Offline cache for Weekly Staff Pay. Bump CACHE when the app files change. */
-const CACHE = 'staff-pay-v21';
+const CACHE = 'staff-pay-v22';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -19,10 +19,11 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   const u = new URL(req.url);
   if (req.method !== 'GET' || u.origin !== self.location.origin || u.pathname.startsWith('/api/')) return;
-  /* The page itself: newest version first, the saved copy only when offline. */
+  /* The page itself: newest version first, the saved copy only when offline.
+     "no-cache" still asks the server every time, but an unchanged page comes back as a tiny "not modified" answer. */
   if (req.mode === 'navigate' || u.pathname.endsWith('/') || u.pathname.endsWith('index.html')) {
     e.respondWith(
-      fetch(req, { cache: 'no-store' })
+      fetch(req, { cache: 'no-cache' })
         .then((res) => { if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); } return res; })
         .catch(() => caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match('index.html')))
     );
