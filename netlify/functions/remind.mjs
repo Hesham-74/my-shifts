@@ -1,9 +1,7 @@
 // Runs every hour. At the hour the manager chose (in their own time zone) it sends
 // "record today's hours" to the manager's phone(s).
-import { getStore } from '@netlify/blobs';
 import webpush from 'web-push';
-
-const phoneKey = (p) => { const d = String(p == null ? '' : p).replace(/\D/g, ''); return d.length >= 9 ? d.slice(-9) : d; };
+import { storesFor, globalStore, allCompanies, phoneKey } from '../lib/tenant.mjs';
 
 async function send(subs, payload, v, subject) {
   let n = 0;
@@ -54,14 +52,15 @@ async function mailSlip(to, sl, wid) {
 }
 
 // Payslips: the day before the chosen day the owner is told; on the day, every payslip marked ready is released to its employee.
-async function payslips(cfg, doc, v, subject) {
+async function payslips(S, doc, v, subject) {
+  const cfg = S.config;
   const st = ((doc && doc.settings) || {}).main || {};
   if (!doc || st.slipDay === undefined || st.slipDay === '' || st.slipDay === null) return 'slips off';
   const now = localNow(st.tz), day = Number(st.slipDay), hour = Number(st.slipHour) || 0;
   if (now.hour !== hour) return 'slips wait';
   const ready = [];
   Object.keys(doc.weeks || {}).forEach((wid) => { const sl = doc.weeks[wid].slips || {}; Object.keys(sl).forEach((sid) => { if (sl[sid] && sl[sid].ready && doc.staff[sid]) ready.push({ wid, sid, slip: sl[sid] }); }); });
-  const store = getStore({ name: 'payslips', consistency: 'strong' });
+  const store = S.payslips;
   const lists = {};
   const listOf = async (k) => lists[k] || (lists[k] = (await store.get(k, { type: 'json' })) || []);
   if (now.dow === (day + 6) % 7) {
@@ -75,7 +74,7 @@ async function payslips(cfg, doc, v, subject) {
     return 'slips notice ' + waiting;
   }
   if (now.dow !== day) return 'slips not today';
-  const subs = getStore({ name: 'subs', consistency: 'strong' });
+  const subs = S.subs;
   let out = 0, mailed = 0;
   for (const r of ready) {
     const stf = doc.staff[r.sid], k = phoneKey(stf.phone); if (k.length < 7) continue;
@@ -98,17 +97,23 @@ async function payslips(cfg, doc, v, subject) {
   return 'slips out ' + out + ' mailed ' + mailed;
 }
 
+// Every business, one after another. One business failing never stops the others.
 export default async () => {
-  const cfg = getStore({ name: 'config', consistency: 'strong' });
-  const v = await cfg.get('vapid', { type: 'json' });
+  const v = await globalStore('config').get('vapid', { type: 'json' });
   const subject = process.env.URL || 'https://my-shifts-app.netlify.app';
-  let slipsResult = '';
-  try { if (v) slipsResult = await payslips(cfg, await getStore({ name: 'backup', consistency: 'strong' }).get('latest', { type: 'json' }), v, subject); } catch (e) { slipsResult = 'slips error'; }
-  const res = await hours(cfg, v, subject);
-  return new Response((await res.text()) + ' | ' + slipsResult);
+  const out = [];
+  for (const cid of await allCompanies()) {
+    const S = storesFor(cid);
+    let slipsResult = '', hoursResult = '';
+    try { if (v) slipsResult = await payslips(S, await S.backup.get('latest', { type: 'json' }), v, subject); } catch (e) { slipsResult = 'slips error'; }
+    try { hoursResult = await (await hours(S, v, subject)).text(); } catch (e) { hoursResult = 'hours error'; }
+    out.push(cid + ': ' + hoursResult + ' | ' + slipsResult);
+  }
+  return new Response(out.join('\n'));
 };
 
-async function hours(cfg, v, subject) {
+async function hours(S, v, subject) {
+  const cfg = S.config;
   const r = await cfg.get('remind', { type: 'json' });
   if (!r || !r.subs || !r.subs.length) return new Response('off');
   const now = new Date();
@@ -120,7 +125,7 @@ async function hours(cfg, v, subject) {
   // Who still has nothing recorded for the working day (before noon the reminder is about yesterday).
   let extra = '';
   try {
-    const doc = await getStore({ name: 'backup', consistency: 'strong' }).get('latest', { type: 'json' });
+    const doc = await S.backup.get('latest', { type: 'json' });
     if (doc) {
       const base = new Date(Date.UTC(Number(get('year')), Number(get('month')) - 1, Number(get('day'))));
       if (hour < 12) base.setUTCDate(base.getUTCDate() - 1);

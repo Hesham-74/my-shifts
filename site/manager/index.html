@@ -242,6 +242,11 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
 .branchbar select { font-weight: 600; }
 /* six tabs and the branch picker are too tall to pin to the top of a phone */
 .top { position: static; }
+.authcard { display: grid; gap: 12px; margin-top: 8px; }
+.authh { font-size: 20px; margin: 0; }
+.authlinks { display: grid; gap: 8px; }
+details > summary.btn { list-style: none; text-align: center; }
+details > summary.btn::-webkit-details-marker { display: none; }
 .slitem { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
 .slitem:first-child { border-top: 0; padding-top: 0; }
 .slitem strong { display: block; }
@@ -408,7 +413,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     });
   }
   function netApi(method, path, body, token) {
-    var opts = { method: method, headers: { 'Authorization': 'Bearer ' + (token || netCfg().token || '') }, cache: 'no-store' };
+    var opts = { method: method, headers: token === 'x' ? {} : { 'Authorization': 'Bearer ' + (token || netCfg().token || '') }, cache: 'no-store' };
     if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
     return fetch(API + path, opts).then(function (r) {
       return r.text().then(function (t) {
@@ -479,7 +484,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     return netApi('GET', 'data?rev=' + (stale ? -1 : (netCfg().rev || 0))).then(function (res) {
       if (res.role && res.role !== netCfg().role) { netSet({ role: res.role }); safeRender(); }
       if (!res.same && res.has) { adopt(res); if (Object.keys(netCfg().dirty || {}).length) scheduleSync(); }
-    }, function (e) { if (e.status === 401) { netSet({ token: '', err: netWhy(e) }); safeRender(); } });
+    }, function (e) { if (e.status === 401) { wipeLocal(); setSetting('net', {}); ui.authMsg = 'You were signed out. Sign in again.'; ui.authErr = true; safeRender(); } });
   }
   function runSync(force, retried) {
     if (!fbOn()) return Promise.resolve();
@@ -736,7 +741,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   function activeLeave(st) { var a = null; (st && st.leaves || []).forEach(function (l) { if (!l.to) a = l; }); return a; }
 
   var SUP_NO_F = ['rate', 'bank', 'cfg-lunch', 'cfg-otAfter', 'cfg-otPremium', 'st-name', 'st-position', 'st-rate', 'st-bank', 'st-phone', 'ns-name', 'ns-position', 'ns-rate', 'ns-bank', 'bk-file', 'st-branch', 'br-name', 'br-new'];
-  var SUP_NO_ACT = ['rm-staff', 'rm-confirm', 'add-staff', 'code-reset', 'fb-restore', 'bk-restore-yes', 'sup-save', 'sup-remove', 'br-add', 'br-rm', 'leave-on', 'leave-off'];
+  var SUP_NO_ACT = ['rm-staff', 'rm-confirm', 'add-staff', 'code-reset', 'fb-restore', 'bk-restore-yes', 'sup-save', 'sup-remove', 'team-add', 'team-rm', 'br-add', 'br-rm', 'leave-on', 'leave-off'];
   /* A supervisor sees everything but only records hours and days off. */
   function applyRole() {
     if (!isSup()) return;
@@ -754,15 +759,141 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
     ['tab-backup', 'tab-slips'].forEach(function (id) { var bt = document.getElementById(id); if (bt) bt.hidden = true; });
     if (ui.tab === 'backup' || ui.tab === 'slips') { ui.tab = 'today'; render(); }
   }
+  /* ---------- accounts: every business signs in with its own email (or phone) and password ---------- */
+  function isAcct() { return fbOn() && !!netCfg().acct; }
+  function needAuth() { return !fbOn() || !!ui.forceAuth; }
+  function wipeLocal() {
+    Object.keys(pending).forEach(function (k) { clearTimeout(pending[k].timer); delete pending[k]; });
+    state.staff = {}; state.weeks = {}; state.branches = {}; state.settings = {}; localSave();
+    setSetting('branch', ''); netRun.lastSig = ''; netRun.status = null;
+  }
+  var AUTH_ERR = { wrong: 'That email or phone number and password do not match.', locked: 'Too many wrong tries. Wait 15 minutes and try again.', emailtaken: 'An account with this email already exists. Sign in instead.', phonetaken: 'This phone number is already used by another account.', email: 'Enter a valid email address.', phone: 'Enter the full phone number.', password: 'Use a password of 8 characters or more.', company: 'Enter the name of your business.', code: 'That code is wrong or too old. Ask for a new one.', id: 'Enter an email or a phone number.' };
+  function authErr(e) { return e.status === 0 ? 'No internet connection.' : AUTH_ERR[e.message] || 'Something went wrong. Try again in a moment.'; }
+  function aIn(id, label, type, extra) {
+    return '<label class="field"><span>' + esc(label) + '</span><input id="' + id + '" type="' + type + '" ' + (extra || '') + ' value="' + esc((ui.authDraft || {})[id] || '') + '"></label>';
+  }
+  function authHTML() {
+    var m = ui.auth || 'login', legacy = fbOn() && !isAcct();
+    var msg = '<p class="msg' + (ui.authErr ? ' err' : '') + '" role="status">' + esc(ui.authBusy ? 'One moment…' : ui.authMsg || '') + '</p>';
+    var link = function (to, text) { return '<button class="btn" type="button" data-act="auth-mode" data-m="' + to + '">' + esc(text) + '</button>'; };
+    var h = '<section class="card authcard"><h2 class="authh">' + (m === 'signup' ? (legacy ? 'Move to your own account' : 'Create your business account') : m === 'forgot' ? 'Forgot your password' : m === 'reset' ? 'Set a new password' : 'Sign in') + '</h2>';
+    if (m === 'signup') {
+      h += (legacy ? '<p class="hint">Your records, staff and payslips move to this account. From now on you sign in with your email and password.</p>' : '<p class="hint">One account for your business. You add your branches, staff and supervisors after this.</p>') +
+        '<form id="auth-f" class="addform" autocomplete="on">' + aIn('a-company', 'Business name', 'text', 'autocomplete="organization" placeholder="Pizza King"') + aIn('a-name', 'Your name', 'text', 'autocomplete="name"') +
+        aIn('a-email', 'Email', 'email', 'autocomplete="email" inputmode="email" autocapitalize="off"') + aIn('a-phone', 'Phone number (optional, you can sign in with it too)', 'tel', 'autocomplete="tel" inputmode="tel"') +
+        aIn('a-pw', 'Password (8 characters or more)', 'password', 'autocomplete="new-password"') + aIn('a-pw2', 'The same password again', 'password', 'autocomplete="new-password"') +
+        '<button class="btn primary" type="submit"' + (ui.authBusy ? ' disabled' : '') + '>' + (legacy ? 'Create account and move my records' : 'Create account') + '</button></form>' + msg +
+        (legacy ? link('stay', 'Not now') : link('login', 'I already have an account'));
+    } else if (m === 'forgot') {
+      h += '<p class="hint">We email you a 6-digit code.</p><form id="auth-f" class="addform">' + aIn('a-email', 'Email', 'email', 'autocomplete="email" inputmode="email" autocapitalize="off"') +
+        '<button class="btn primary" type="submit"' + (ui.authBusy ? ' disabled' : '') + '>Email me a code</button></form>' + msg + link('login', 'Back to sign in');
+    } else if (m === 'reset') {
+      h += '<p class="hint">Check your email for the code. It works for 30 minutes.</p><form id="auth-f" class="addform">' + aIn('a-code', 'Code from the email', 'text', 'inputmode="numeric" autocomplete="one-time-code" maxlength="6"') +
+        aIn('a-pw', 'New password (8 characters or more)', 'password', 'autocomplete="new-password"') + aIn('a-pw2', 'The same password again', 'password', 'autocomplete="new-password"') +
+        '<button class="btn primary" type="submit"' + (ui.authBusy ? ' disabled' : '') + '>Save and sign in</button></form>' + msg + link('forgot', 'Send a new code');
+    } else {
+      h += '<form id="auth-f" class="addform" autocomplete="on">' + aIn('a-id', 'Email or phone number', 'text', 'autocomplete="username" autocapitalize="off" spellcheck="false"') + aIn('a-pw', 'Password', 'password', 'autocomplete="current-password"') +
+        '<button class="btn primary" type="submit"' + (ui.authBusy ? ' disabled' : '') + '>Sign in</button></form>' + msg +
+        '<div class="authlinks">' + link('forgot', 'Forgot password') + link('signup', 'Create a business account') + '</div>' +
+        '<p class="hint">Supervisors sign in with the email or phone number and password their manager gave them.</p>';
+    }
+    return h + '</section>';
+  }
+  /* Typed values live in memory only (never saved), so a refresh of the screen does not empty the form. */
+  function keepDraft() { ui.authDraft = ui.authDraft || {}; Array.prototype.forEach.call(app.querySelectorAll('#auth-f input'), function (el) { ui.authDraft[el.id] = el.value; }); }
+  document.addEventListener('input', function (e) { if (e.target && e.target.closest && e.target.closest('#auth-f')) keepDraft(); });
+  function authDone(res, kind) {
+    var prev = netCfg().cid, legacyBefore = fbOn() && !isAcct();
+    if (kind !== 'signup' && prev !== res.cid) wipeLocal();
+    netSet({ token: res.token, acct: true, role: res.role, cid: res.cid, company: res.company, name: res.name, email: res.email || '', err: '', rev: 0, dirty: {}, last: 0 });
+    ui.forceAuth = false; ui.auth = 'login'; ui.authBusy = false; ui.authMsg = ''; ui.authDraft = {};
+    if (res.company && !mainSet().company && res.role === 'admin') mainSet().company = res.company;
+    return netApi('GET', 'data').then(function (d) {
+      if (d.has) { adopt(d); render(); toast(res.moved ? 'Your records moved to your new account.' : 'Signed in.'); return; }
+      render();
+      if (res.role === 'admin' && hasData()) return runSync(true).then(function () { toast(legacyBefore ? 'Your records moved to your new account.' : 'Account ready. Your records are saved online.'); });
+      toast(res.role === 'admin' ? 'Account ready. Add your staff in the Staff tab.' : 'Signed in. Your manager has not saved any records yet.');
+    });
+  }
+  document.addEventListener('submit', function (e) {
+    if (!e.target || e.target.id !== 'auth-f') return;
+    e.preventDefault(); if (ui.authBusy) return;
+    var v = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    var m = ui.auth || 'login', fail = function (t) { ui.authBusy = false; ui.authErr = true; ui.authMsg = t; render(); };
+    keepDraft();
+    if ((m === 'signup' || m === 'reset') && v('a-pw').length < 8) return fail(AUTH_ERR.password);
+    if ((m === 'signup' || m === 'reset') && document.getElementById('a-pw').value !== document.getElementById('a-pw2').value) return fail('The two passwords are not the same.');
+    ui.authBusy = true; ui.authErr = false; ui.authMsg = ''; render();
+    var req;
+    if (m === 'login') req = netApi('POST', 'auth/login', { id: v('a-id'), password: document.getElementById('a-pw') ? (ui.lastPw = v('a-pw')) : '' }, 'x');
+    else if (m === 'signup') req = netApi('POST', 'auth/signup', { company: v('a-company'), name: v('a-name'), email: v('a-email'), phone: v('a-phone'), password: v('a-pw'), legacy: fbOn() && !isAcct() ? netCfg().token : '' }, 'x');
+    else if (m === 'forgot') {
+      ui.resetEmail = v('a-email');
+      return netApi('POST', 'auth/forgot', { email: ui.resetEmail }, 'x').then(function () { ui.authBusy = false; ui.auth = 'reset'; ui.authErr = false; ui.authMsg = 'If ' + ui.resetEmail + ' has an account, a code is on its way.'; render(); }, function (e) { fail(authErr(e)); });
+    } else req = netApi('POST', 'auth/reset', { email: ui.resetEmail, code: v('a-code'), password: v('a-pw') }, 'x');
+    req.then(function (res) { return authDone(res, m); }).catch(function (e) { fail(authErr(e)); });
+  });
+  function signOut() {
+    var t = netCfg().token;
+    if (t && isAcct()) netApi('POST', 'auth/logout', {}, t).catch(function () {});
+    wipeLocal(); setSetting('net', {}); ui.team = null; ui.auth = 'login'; ui.forceAuth = false; render(); window.scrollTo(0, 0);
+  }
+  /* Owner: who else can sign in to this business. */
+  function loadTeam() { if (!isAcct() || isSup() || ui.teamBusy) return; ui.teamBusy = true; netApi('GET', 'team').then(function (r) { ui.teamBusy = false; ui.team = r.members || []; if (ui.tab === 'staff') safeRender(); }, function () { ui.teamBusy = false; }); }
   function supHTML() {
     if (isSup()) return '';
-    var has = !!netCfg().hasSup;
-    return '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>Supervisor account</strong>' +
-      '<p class="hint">' + (has ? 'A supervisor password is set. ' : '') + 'The supervisor opens this same app, enters their own password and can record hours and days off. They see everything but cannot change rates, bank amounts, staff or restore backups.</p>' +
-      '<label class="field"><span>' + (has ? 'New supervisor password' : 'Supervisor password (8 characters or more)') + '</span><input type="password" id="sup-pw" data-f="sup-pw" autocomplete="new-password"></label>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="sup-save">' + (has ? 'Change password' : 'Create supervisor account') + '</button>' +
-      (has ? '<button class="btn danger" style="flex:1 1 140px" data-act="sup-remove">' + (ui.supAsk ? 'Tap again to remove' : 'Remove supervisor') + '</button>' : '') + '</div>' +
+    if (!isAcct()) return '<div class="card nudge"><div><strong>Move to an email account</strong><p class="hint">Sign in with your email from any phone, add supervisors and get your password back if you forget it.</p></div><button class="btn primary" data-act="auth-mode" data-m="signup">Set up</button></div>';
+    if (!ui.team) loadTeam();
+    var list = (ui.team || []).map(function (m) {
+      var who = [m.email, m.phone].filter(Boolean).join(' · ');
+      return '<div class="slitem" data-uid="' + esc(m.uid) + '"><div><strong>' + esc(m.name || who) + '</strong><span class="hint">' + (m.owner ? 'Owner · ' : m.role === 'supervisor' ? 'Supervisor · ' : '') + esc(who) + '</span></div>' +
+        (m.owner ? '' : '<button class="btn danger" data-act="team-rm">' + (ui.teamAsk === m.uid ? 'Tap again' : 'Remove') + '</button>') + '</div>';
+    }).join('');
+    return '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>People who can sign in</strong>' +
+      '<div class="sllist">' + (list || '<p class="hint">Loading…</p>') + '</div>' +
+      '<p class="hint">Add a supervisor. They sign in with the email or phone number and the password you set here. They record hours and days off and never see pay, rates, bank or payslips.</p>' +
+      '<label class="field"><span>Name</span><input type="text" id="t-name" data-f="t-in" autocomplete="off"></label>' +
+      '<label class="field"><span>Email (or leave empty and use a phone number)</span><input type="email" id="t-email" data-f="t-in" inputmode="email" autocapitalize="off" autocomplete="off"></label>' +
+      '<label class="field"><span>Phone number</span><input type="tel" id="t-phone" data-f="t-in" inputmode="tel" autocomplete="off"></label>' +
+      '<label class="field"><span>Their password (8 characters or more)</span><input type="text" id="t-pw" data-f="t-in" autocomplete="off" autocapitalize="off"></label>' +
+      '<button class="btn primary" data-act="team-add">Add supervisor</button>' +
       '<p class="msg' + (ui.supErr ? ' err' : '') + '" role="status">' + esc(ui.supMsg || '') + '</p></div>';
+  }
+  function accountHTML() {
+    if (!isAcct()) return '';
+    var f = netCfg();
+    return '<section class="card"><h2 class="sec-title">Your account</h2><div class="addform">' +
+      '<p><strong>' + esc(f.company || '') + '</strong><br><span class="hint">' + esc(f.name || '') + (f.email ? ' · ' + esc(f.email) : '') + ' · ' + (isSup() ? 'Supervisor' : 'Owner') + '</span></p>' +
+      '<details><summary class="btn">Change my password</summary><div class="addform" style="margin-top:10px">' +
+      '<label class="field"><span>Current password</span><input type="password" id="p-old" data-f="t-in" autocomplete="current-password"></label>' +
+      '<label class="field"><span>New password (8 characters or more)</span><input type="password" id="p-new" data-f="t-in" autocomplete="new-password"></label>' +
+      '<button class="btn primary" data-act="acct-pw">Save new password</button></div></details>' +
+      '<button class="btn" data-act="fb-off">Sign out of this phone</button></div></section>';
+  }
+  function teamAct(act, b) {
+    var val = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    if (act === 'auth-mode') {
+      var to = b.getAttribute('data-m');
+      if (to === 'stay') { ui.forceAuth = false; render(); return; }
+      keepDraft(); ui.auth = to; ui.authMsg = ''; ui.authErr = false; if (fbOn()) ui.forceAuth = true; render(); window.scrollTo(0, 0); return;
+    }
+    if (act === 'team-add') {
+      ui.supMsg = 'Adding…'; ui.supErr = false;
+      netApi('POST', 'team/add', { name: val('t-name'), email: val('t-email'), phone: val('t-phone'), password: val('t-pw') }).then(function (r) {
+        ui.team = r.members; ui.supErr = false; ui.supMsg = 'Added. Give them the app link and their password.'; render();
+      }, function (e) { ui.supErr = true; ui.supMsg = authErr(e); render(); });
+      return;
+    }
+    if (act === 'team-rm') {
+      var uidR = b.closest('[data-uid]').getAttribute('data-uid');
+      if (ui.teamAsk !== uidR) { ui.teamAsk = uidR; render(); return; }
+      ui.teamAsk = null;
+      netApi('POST', 'team/remove', { uid: uidR }).then(function (r) { ui.team = r.members; ui.supMsg = 'Removed. They are signed out.'; ui.supErr = false; render(); }, function (e) { ui.supErr = true; ui.supMsg = authErr(e); render(); });
+      return;
+    }
+    if (act === 'acct-pw') {
+      netApi('POST', 'auth/password', { old: val('p-old'), password: val('p-new') }).then(function (r) { netSet({ token: r.token }); toast('Password changed. Other phones are signed out.'); render(); }, function (e) { toast(e.status === 401 ? 'The current password is wrong.' : authErr(e)); });
+    }
   }
 
   /* ---------- staff tab pieces ---------- */
@@ -786,7 +917,6 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
         '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
         '<button class="btn" data-act="fb-nudge">Remind all staff to check their times</button>' +
         remindHTML() + supHTML() +
-        '<button class="btn" data-act="fb-off">Turn off on this phone</button>' +
         '<p class="hint">A few seconds after every change, each employee’s days and times are published to the staff app, and a full private backup of your records is saved online. Staff log in with their phone number and never see pay, rate, bank or cash.</p>';
     } else {
       h += '<p class="hint">Sign in with your manager or supervisor password. Records are shared between your phones, published to the staff app and backed up online after every change.</p>' +
@@ -847,6 +977,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   }
 
   function fbAct(act, b) {
+    if (/^(auth|team|acct)-/.test(act)) { teamAct(act, b); return; }
     if (act.indexOf('slip-') === 0) { if (!isSup()) slipAct(act, b); return; }
     if (act === 'code-send') {
       var sid = cardSid(b), s = state.staff[sid]; if (!s) return;
@@ -904,7 +1035,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       var el = document.getElementById('fb-status'); if (el) { el.textContent = 'Sending…'; el.className = 'msg'; }
       runSync(true);
     } else if (act === 'fb-off') {
-      netSet({ token: '', err: '', role: '' }); ui.fbMsg = ''; ui.fbErr = false; ui.netRestoreAsk = false; render();
+      signOut();
     } else if (act === 'fb-restore') {
       if (!ui.netRestoreAsk) { ui.netRestoreAsk = true; render(); return; }
       ui.netRestoreAsk = false;
@@ -932,7 +1063,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
   function fbInput(f, t) {
     if (slipInput(f, t)) return true;
     if (f === 'fb-pw') { ui.netPw = t.value; return true; }
-    if (f === 'fb-hour' || f === 'sup-pw' || f === 'br-new') return true;
+    if (f === 'fb-hour' || f === 'sup-pw' || f === 'br-new' || f === 't-in') return true;
     if (f === 'br-sel') { setSetting('branch', t.value); ui.confirmRm = null; render(); return true; }
     if (f === 'st-branch') { var sb = cardSid(t); if (state.staff[sb] && state.branches[t.value]) { state.staff[sb].branch = t.value; queueSave('staff', sb, 0); render(); } return true; }
     if (f === 'br-name') { var row = t.closest('[data-bid]'), id2 = row && row.getAttribute('data-bid'), v2 = t.value.trim(); if (id2 && state.branches[id2] && v2) { state.branches[id2].name = v2; queueSave('branches', id2, 300); branchBar(); } return true; }
@@ -1143,7 +1274,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       document.getElementById('tab-' + t).setAttribute('aria-selected', String(ui.tab === t));
     });
   }
-  function render() { renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } applyRole(); branchBar(); }
+  function render() { var tb = document.getElementById('tabs'), bb = document.getElementById('branchbar'), h1 = document.querySelector('.bar h1'); if (h1) h1.textContent = netCfg().company || 'Weekly Staff Pay'; if (needAuth()) { if (tb) tb.hidden = true; if (bb) { bb.hidden = true; bb.setAttribute('data-off', '1'); } app.innerHTML = authHTML(); return; } if (bb) bb.removeAttribute('data-off'); renderCore(); if (ui.slip && ui.tab === 'slips' && !isSup() && state.staff[ui.slip.sid]) app.innerHTML = slipHTML(); else { ui.slip = null; } applyRole(); branchBar(); }
   function renderCore() {
     var tabsEl = document.getElementById('tabs'), sview = role === 'staff' || ui.preview;
     if (tabsEl) tabsEl.hidden = sview || !roleKnown;
@@ -1255,7 +1386,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       '<label class="field"><span>€ per hour</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="ns-rate" value="' + esc(ui.newStaff.rate) + '" placeholder="0.00"></label></div>' +
       '<label class="field"><span>Bank amount per week (€)</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" data-f="ns-bank" value="' + esc(ui.newStaff.bank) + '" placeholder="0.00"></label>' +
       '<button class="btn primary" data-act="add-staff">Add employee</button><p class="msg err" role="status">' + esc(ui.staffMsg) + '</p></div></section>';
-    h += branchesHTML() + publishHTML();
+    h += branchesHTML() + publishHTML() + accountHTML();
     return h;
   }
 
@@ -1533,7 +1664,7 @@ input[type="time"]::-webkit-date-and-time-value, input[type="date"]::-webkit-dat
       sortedStaff().filter(function (e) { return !onLeave(e[1], ui.day); }).forEach(function (e) { if (!findShift(dayWid(), e[0], ui.day) && !isOff(dayWid(), e[0], ui.day)) { var u2 = usualFor(e[0]); setDayTimes(e[0], u2.inT, u2.outT); } });
       refreshDay();
     }
-    else if (/^(code|fb|sup|br|leave|slip)-/.test(act)) fbAct(act, b);
+    else if (/^(code|fb|sup|br|leave|slip|auth|team|acct)-/.test(act)) fbAct(act, b);
     else if (act === 'bk-email') backupEmail();
     else if (act === 'bk-save') { if (downloadBackup()) { markBackup(); ui.bkMsg = 'Backup file saved to your phone.'; ui.bkErr = false; } else { ui.bkMsg = 'Could not create the backup file.'; ui.bkErr = true; } render(); }
     else if (act === 'bk-restore-yes') restoreApply();

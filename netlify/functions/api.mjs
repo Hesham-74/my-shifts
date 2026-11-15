@@ -1,26 +1,31 @@
-// Small server for the staff apps.
-//   POST /api/enter                employee: is this phone on the list, and does it have a code yet?
-//   POST /api/setpin               employee: create their own code (only when none is set)
-//   GET  /api/schedule?phone=...   employee (phone + their code): days and times (never pay)
-//   POST /api/nudge                manager: ask one employee, or everyone, to check their times
-//   POST /api/admin-remind         manager: turn the daily "record the hours" reminder on or off for this phone
-//   GET  /api/payslips?phone=...   employee (phone + their code): the payslips their employer has released
-//   POST /api/resetpin             manager: clear one employee's code so they can make a new one
-//   POST /api/login                manager: first call sets the password, later calls check it
-//   PUT  /api/sync                 manager: replace all schedules + save a full private backup
-//   GET  /api/backup               manager: read the latest backup
-//   GET  /api/status               manager: who has seen their latest change, who has notifications on
-//   GET  /api/push-key             anyone: public key for notifications
-//   POST /api/subscribe            employee: turn notifications on for this phone
-//   POST /api/seen                 employee: "I have opened my current times"
-import { getStore } from '@netlify/blobs';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+// Server for the staff apps. Every business has its own account and its own records.
+//   Accounts:   POST /api/auth/signup | auth/login | auth/logout | auth/forgot | auth/reset | auth/password
+//               GET /api/team, POST /api/team/add | team/remove | team/password   (the owner manages supervisors)
+//   Employees:  POST /api/enter, /api/setpin, /api/subscribe, /api/seen, /api/ask
+//               GET /api/schedule, /api/payslips              (phone + their own code, plus the business id "c")
+//   Managers:   PUT /api/sync, GET /api/data | backup | status, POST /api/nudge | admin-remind | resetpin
+import { createHash, randomBytes, randomInt, timingSafeEqual, scrypt as scryptCb } from 'node:crypto';
 import webpush from 'web-push';
+import { storesFor, globalStore, phoneKey } from '../lib/tenant.mjs';
 
 const json = (o, status = 200) => new Response(JSON.stringify(o), {
   status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
 });
-const phoneKey = (p) => { const d = String(p == null ? '' : p).replace(/\D/g, ''); return d.length >= 9 ? d.slice(-9) : d; };
+const sha = (x) => createHash('sha256').update(String(x)).digest('hex');
+const scrypt = (pw, salt) => new Promise((res, rej) => scryptCb(String(pw), salt, 32, (e, k) => (e ? rej(e) : res(k.toString('hex')))));
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CID = /^(legacy|c[a-f0-9]{12})$/;
+const DAY = 86400000;
+const FROM_DOMAIN = process.env.MAIL_FROM_DOMAIN || 'mail.myshifts.info';
+async function sendMail(to, subject, html) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return false;
+  try {
+    const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: 'My Shifts <account@' + FROM_DOMAIN + '>', to: [to], subject, html }) });
+    return r.ok;
+  } catch (e) { return false; }
+}
 const hashOf = (token, salt) => createHash('sha256').update(salt + ':' + token).digest('hex');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DATE = /^\d{4}-\d{2}-\d{2}$/, TIME = /^\d{2}:\d{2}$/;
@@ -52,13 +57,11 @@ const noMoney = (st) => {
 export default async (req) => {
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/api\//, '').replace(/\/+$/, '');
-  const cfg = getStore({ name: 'config', consistency: 'strong' });
-  const sch = getStore({ name: 'schedules', consistency: 'strong' });
-  const bak = getStore({ name: 'backup', consistency: 'strong' });
-  const subs = getStore({ name: 'subs', consistency: 'strong' });
-  const seen = getStore({ name: 'seen', consistency: 'strong' });
-  const pins = getStore({ name: 'pins', consistency: 'strong' });
-  const asks = getStore({ name: 'asks', consistency: 'strong' });
+  const G = { cfg: globalStore('config'), accounts: globalStore('accounts'), sessions: globalStore('sessions'), companies: globalStore('companies'), phones: globalStore('phones') };
+  // The business this request is about; set once the caller is known.
+  let cid = null, cfg, sch, bak, subs, seen, pins, asks, slips;
+  const use = (c) => { cid = c; const S = storesFor(c); cfg = S.config; sch = S.schedules; bak = S.backup; subs = S.subs; seen = S.seen; pins = S.pins; asks = S.asks; slips = S.payslips; };
+  const body_ = async (max) => { try { return JSON.parse((await req.text()).slice(0, max || 2000)) || {}; } catch (e) { return {}; } };
 
   // Employee check: 'ok', 'setpin' (no code yet), 'wrongpin', or 'locked' (too many wrong tries).
   const staffAuth = async (k) => {
@@ -76,8 +79,8 @@ export default async (req) => {
   const denied = (why) => json({ error: why }, why === 'locked' ? 429 : 401);
 
   const vapid = async () => {
-    let v = await cfg.get('vapid', { type: 'json' });
-    if (!v) { v = webpush.generateVAPIDKeys(); await cfg.setJSON('vapid', v); }
+    let v = await G.cfg.get('vapid', { type: 'json' });
+    if (!v) { v = webpush.generateVAPIDKeys(); await G.cfg.setJSON('vapid', v); }
     return v;
   };
   const notify = async (k, text) => {
@@ -109,15 +112,93 @@ export default async (req) => {
 
   const tokenOf = () => { const m = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.get('authorization') || ''); return m ? m[1] : ''; };
   const matches = (t, a) => { if (!t || !a) return false; const x = Buffer.from(hashOf(t, a.salt)), y = Buffer.from(a.hash); return x.length === y.length && timingSafeEqual(x, y); };
-  // 'admin' (the manager: everything), 'supervisor' (hours and days off only), or null.
-  const roleOf = async () => {
+  // The signed-in manager or supervisor: { cid, role, uid }, or null.
+  const sessionOf = async () => {
     const t = tokenOf(); if (!t) return null;
-    if (matches(t, await cfg.get('admin', { type: 'json' }))) return 'admin';
-    if (matches(t, await cfg.get('supervisor', { type: 'json' }))) return 'supervisor';
+    const ss = await G.sessions.get(sha(t), { type: 'json' });
+    if (ss && ss.exp > Date.now()) {
+      const acc = await G.accounts.get('u:' + ss.uid, { type: 'json' });
+      if (acc) return { cid: acc.cid, role: acc.role, uid: ss.uid, acc };
+    }
+    // The single business password used before accounts existed, until the owner moves it to an account.
+    const L = storesFor('legacy').config;
+    if (!(await L.get('claimed', { type: 'json' }))) {
+      if (matches(t, await L.get('admin', { type: 'json' }))) return { cid: 'legacy', role: 'admin', uid: null, legacy: true };
+      if (matches(t, await L.get('supervisor', { type: 'json' }))) return { cid: 'legacy', role: 'supervisor', uid: null, legacy: true };
+    }
     return null;
   };
-  const isAdmin = async () => (await roleOf()) === 'admin';
-  const isUser = async () => !!(await roleOf());
+  let me = null;
+  const signedIn = async (need) => {
+    me = await sessionOf();
+    if (!me || (need === 'admin' && me.role !== 'admin')) { await sleep(800); return false; }
+    use(me.cid); return true;
+  };
+  const roleOf = async () => (me ? me.role : null);
+  const isAdmin = async () => !!me && me.role === 'admin';
+  const isUser = async () => !!me;
+  const no = () => json({ error: 'wrongpassword' }, 401);
+
+  // An employee's business: from the app ("c"), or found from their phone number.
+  const companyFor = async (k, c) => {
+    if (k.length < 7) return null;
+    if (c) return CID.test(c) && (await storesFor(c).schedules.get(k, { type: 'json' })) ? c : null;
+    const found = [];
+    for (const x of ((await G.phones.get(k, { type: 'json' })) || [])) if (CID.test(x) && found.indexOf(x) < 0 && (await storesFor(x).schedules.get(k, { type: 'json' }))) found.push(x);
+    if (found.indexOf('legacy') < 0 && (await storesFor('legacy').schedules.get(k, { type: 'json' }))) found.push('legacy');
+    return found.length === 1 ? found[0] : found.length ? found : null;
+  };
+  const staffCtx = async (phone, c) => {
+    const k = phoneKey(phone), co = await companyFor(k, c);
+    if (!co) return { err: json({ error: 'notfound' }, 404) };
+    if (Array.isArray(co)) return { err: json({ error: 'choose' }, 409) };
+    use(co); return { k };
+  };
+
+  // Accounts
+  const newSession = async (acc) => {
+    const token = randomBytes(32).toString('hex'), key = sha(token);
+    await G.sessions.setJSON(key, { uid: acc.uid, exp: Date.now() + 180 * DAY });
+    const list = (acc.sessions || []).concat([key]);
+    for (const old of list.slice(0, Math.max(0, list.length - 10))) await G.sessions.delete(old);
+    acc.sessions = list.slice(-10);
+    await G.accounts.setJSON('u:' + acc.uid, acc);
+    return token;
+  };
+  const endSessions = async (acc) => { for (const k of acc.sessions || []) await G.sessions.delete(k); acc.sessions = []; };
+  const accountFor = async (id) => {
+    const v = String(id || '').trim().toLowerCase(), key = v.indexOf('@') > -1 ? 'e:' + v : 'p:' + phoneKey(v);
+    if (key === 'p:' || key.length < 6) return null;
+    const ref = await G.accounts.get(key, { type: 'json' });
+    return ref ? G.accounts.get('u:' + ref.uid, { type: 'json' }) : null;
+  };
+  const freeIds = async (email, pk) => {
+    if (email && (await G.accounts.get('e:' + email, { type: 'json' }))) return 'emailtaken';
+    if (pk && (await G.accounts.get('p:' + pk, { type: 'json' }))) return 'phonetaken';
+    return '';
+  };
+  const makeAccount = async (c, role, name, email, pk, password) => {
+    const uid = 'u' + randomBytes(8).toString('hex'), salt = randomBytes(16).toString('hex');
+    const acc = { uid, cid: c, role, name: String(name || '').slice(0, 80), email: email || '', phone: pk || '', salt, hash: await scrypt(password, salt), created: new Date().toISOString(), sessions: [] };
+    await G.accounts.setJSON('u:' + uid, acc);
+    if (email) await G.accounts.setJSON('e:' + email, { uid });
+    if (pk) await G.accounts.setJSON('p:' + pk, { uid });
+    return acc;
+  };
+  const dropAccount = async (acc) => {
+    await endSessions(acc);
+    if (acc.email) await G.accounts.delete('e:' + acc.email);
+    if (acc.phone) await G.accounts.delete('p:' + acc.phone);
+    await G.accounts.delete('u:' + acc.uid);
+  };
+  const welcome = async (acc, token) => {
+    const co = (await G.companies.get(acc.cid, { type: 'json' })) || {};
+    use(acc.cid);
+    const meta = await bak.get('meta', { type: 'json' });
+    return json({ ok: true, token, role: acc.role, cid: acc.cid, company: co.name || '', name: acc.name, email: acc.email, hasBackup: !!meta });
+  };
+  const pwOK = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 200;
+
   const sharedState = async () => {
     const meta = (await bak.get('meta', { type: 'json' })) || {};
     const doc = await bak.get('latest', { type: 'json' });
@@ -126,26 +207,29 @@ export default async (req) => {
 
   try {
     if (path === 'schedule' && req.method === 'GET') {
-      const k = phoneKey(url.searchParams.get('phone'));
-      if (k.length < 7) return json({ error: 'badphone' }, 400);
+      const sc = await staffCtx(url.searchParams.get('phone'), url.searchParams.get('c')); if (sc.err) return sc.err; const k = sc.k;
       const d = await sch.get(k, { type: 'json' });
-      if (!d) return json({ error: 'notfound' }, 404);
       const a = await staffAuth(k); if (a !== 'ok') return denied(a);
       return json(d);
     }
 
     if (path === 'enter' && req.method === 'POST') {
-      const body = JSON.parse((await req.text()).slice(0, 300));
-      const k = phoneKey(body.phone);
-      if (k.length < 7 || !(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
-      return json({ ok: true, hasPin: !!(await pins.get(k, { type: 'json' })) });
+      const b = await body_(300), k = phoneKey(b.phone), co = await companyFor(k, b.c);
+      if (!co) return json({ error: 'notfound' }, 404);
+      if (Array.isArray(co)) {
+        const list = [];
+        for (const x of co) { const r = await G.companies.get(x, { type: 'json' }); list.push({ c: x, name: (r && r.name) || 'Your employer' }); }
+        return json({ ok: true, choose: list });
+      }
+      use(co);
+      const r = await G.companies.get(co, { type: 'json' });
+      return json({ ok: true, c: co, company: (r && r.name) || '', hasPin: !!(await pins.get(k, { type: 'json' })) });
     }
 
     if (path === 'setpin' && req.method === 'POST') {
-      const body = JSON.parse((await req.text()).slice(0, 300));
-      const k = phoneKey(body.phone), t = tokenOf();
-      if (k.length < 7 || !t) return json({ error: 'bad' }, 400);
-      if (!(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
+      const b = await body_(300), t = tokenOf();
+      if (!t) return json({ error: 'bad' }, 400);
+      const sc = await staffCtx(b.phone, b.c); if (sc.err) return sc.err; const k = sc.k;
       if (await pins.get(k, { type: 'json' })) return json({ error: 'haspin' }, 409);
       const salt = randomBytes(16).toString('hex');
       await pins.setJSON(k, { salt, hash: hashOf(t, salt), fails: 0 });
@@ -153,8 +237,8 @@ export default async (req) => {
     }
 
     if (path === 'nudge' && req.method === 'POST') {
-      if (!(await isUser())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
-      const body = JSON.parse((await req.text()).slice(0, 300));
+      if (!(await signedIn())) return no();
+      const body = await body_(300);
       let keys;
       if (body.phone) keys = [phoneKey(body.phone)]; else keys = (await sch.list()).blobs.map((b) => b.key);
       let sent = 0, off = 0;
@@ -163,8 +247,8 @@ export default async (req) => {
     }
 
     if (path === 'admin-remind' && req.method === 'POST') {
-      if (!(await isUser())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
-      const body = JSON.parse((await req.text()).slice(0, 5000));
+      if (!(await signedIn())) return no();
+      const body = await body_(5000);
       const cur = (await cfg.get('remind', { type: 'json' })) || { subs: [] };
       const sub = body.sub;
       if (body.off) {
@@ -186,30 +270,138 @@ export default async (req) => {
     }
 
     if (path === 'resetpin' && req.method === 'POST') {
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
-      const body = JSON.parse((await req.text()).slice(0, 300));
+      if (!(await signedIn('admin'))) return no();
+      const body = await body_(300);
       const k = phoneKey(body.phone);
       await pins.delete(k); await subs.delete(k);
       return json({ ok: true, status: await statusOf([k]) });
     }
 
     if (path === 'login' && req.method === 'POST') {
-      const t = tokenOf(); if (!t) return json({ error: 'badtoken' }, 400);
-      const a = await cfg.get('admin', { type: 'json' });
-      if (!a) {
-        const salt = randomBytes(16).toString('hex');
-        await cfg.setJSON('admin', { salt, hash: hashOf(t, salt), created: new Date().toISOString() });
-        return json({ ok: true, created: true, role: 'admin', hasBackup: false, hasSupervisor: false });
-      }
-      const role = await roleOf();
-      if (!role) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      // The old single-business password. Works until the owner moves to an email account.
+      if (!(await signedIn()) || !me.legacy) return no();
       const meta = await bak.get('meta', { type: 'json' });
-      return json({ ok: true, created: false, role, hasBackup: !!meta, backupAt: meta ? meta.at : null, hasSupervisor: !!(await cfg.get('supervisor', { type: 'json' })) });
+      return json({ ok: true, created: false, legacy: true, role: me.role, hasBackup: !!meta, backupAt: meta ? meta.at : null, hasSupervisor: false });
+    }
+
+    if (path === 'auth/signup' && req.method === 'POST') {
+      const b = await body_(1000);
+      const company = String(b.company || '').trim().slice(0, 80), name = String(b.name || '').trim().slice(0, 80);
+      const email = String(b.email || '').trim().toLowerCase(), pk = b.phone ? phoneKey(b.phone) : '';
+      if (!company) return json({ error: 'company' }, 400);
+      if (!EMAIL.test(email)) return json({ error: 'email' }, 400);
+      if (pk && pk.length < 7) return json({ error: 'phone' }, 400);
+      if (!pwOK(b.password)) return json({ error: 'password' }, 400);
+      const taken = await freeIds(email, pk); if (taken) return json({ error: taken }, 409);
+      let c = 'c' + randomBytes(6).toString('hex'), moved = false;
+      // The first business moves its records to this account when the phone still holds its old password.
+      if (/^[a-f0-9]{64}$/.test(String(b.legacy || ''))) {
+        const L = storesFor('legacy').config;
+        if (!(await L.get('claimed', { type: 'json' })) && matches(b.legacy, await L.get('admin', { type: 'json' }))) {
+          c = 'legacy'; moved = true;
+          await L.setJSON('claimed', { at: new Date().toISOString(), email });
+          await L.delete('supervisor');
+        }
+      }
+      const acc = await makeAccount(c, 'admin', name, email, pk, b.password);
+      await G.companies.setJSON(c, { name: company, owner: acc.uid, members: [acc.uid], created: new Date().toISOString(), plan: 'trial' });
+      const token = await newSession(acc);
+      const res = await welcome(acc, token); const out = await res.json(); out.moved = moved;
+      return json(out);
+    }
+
+    if (path === 'auth/login' && req.method === 'POST') {
+      const b = await body_(500), acc = await accountFor(b.id);
+      if (!acc) { await sleep(800); return json({ error: 'wrong' }, 401); }
+      if (acc.lockUntil && Date.now() < acc.lockUntil) return json({ error: 'locked' }, 429);
+      if ((await scrypt(b.password || '', acc.salt)) !== acc.hash) {
+        acc.fails = (acc.fails || 0) + 1;
+        if (acc.fails >= 5) { acc.fails = 0; acc.lockUntil = Date.now() + 15 * 60000; }
+        await G.accounts.setJSON('u:' + acc.uid, acc); await sleep(800);
+        return json({ error: 'wrong' }, 401);
+      }
+      acc.fails = 0; acc.lockUntil = 0;
+      return welcome(acc, await newSession(acc));
+    }
+
+    if (path === 'auth/logout' && req.method === 'POST') {
+      const t = tokenOf(); if (t) await G.sessions.delete(sha(t));
+      return json({ ok: true });
+    }
+
+    if (path === 'auth/forgot' && req.method === 'POST') {
+      const b = await body_(300), email = String(b.email || '').trim().toLowerCase();
+      const acc = EMAIL.test(email) ? await accountFor(email) : null;
+      if (acc) {
+        const code = String(randomInt(0, 1000000)).padStart(6, '0'), salt = randomBytes(8).toString('hex');
+        await G.accounts.setJSON('r:' + email, { salt, hash: sha(salt + code), exp: Date.now() + 30 * 60000, tries: 0 });
+        await sendMail(email, 'Your My Shifts code: ' + code, '<div style="font:16px Arial,Helvetica,sans-serif;color:#14213a;max-width:480px;margin:0 auto;padding:16px"><p>Your code to set a new password:</p><p style="font:bold 30px monospace;letter-spacing:6px">' + code + '</p><p style="color:#566580">It works for 30 minutes. If you did not ask for it, you can ignore this email.</p></div>');
+      }
+      return json({ ok: true });
+    }
+
+    if (path === 'auth/reset' && req.method === 'POST') {
+      const b = await body_(500), email = String(b.email || '').trim().toLowerCase();
+      const r = await G.accounts.get('r:' + email, { type: 'json' }), acc = r ? await accountFor(email) : null;
+      if (!r || !acc || r.exp < Date.now() || r.tries >= 5) { await sleep(800); return json({ error: 'code' }, 400); }
+      if (sha(r.salt + String(b.code || '').trim()) !== r.hash) { r.tries++; await G.accounts.setJSON('r:' + email, r); await sleep(800); return json({ error: 'code' }, 400); }
+      if (!pwOK(b.password)) return json({ error: 'password' }, 400);
+      await G.accounts.delete('r:' + email);
+      await endSessions(acc);
+      acc.salt = randomBytes(16).toString('hex'); acc.hash = await scrypt(b.password, acc.salt); acc.fails = 0; acc.lockUntil = 0;
+      return welcome(acc, await newSession(acc));
+    }
+
+    if (path === 'auth/password' && req.method === 'POST') {
+      if (!(await signedIn()) || !me.acc) return no();
+      const b = await body_(500), acc = me.acc;
+      if ((await scrypt(b.old || '', acc.salt)) !== acc.hash) { await sleep(800); return json({ error: 'wrong' }, 401); }
+      if (!pwOK(b.password)) return json({ error: 'password' }, 400);
+      acc.salt = randomBytes(16).toString('hex'); acc.hash = await scrypt(b.password, acc.salt);
+      await endSessions(acc);
+      return json({ ok: true, token: await newSession(acc) });
+    }
+
+    if (path.indexOf('team') === 0) {
+      if (!(await signedIn('admin')) || !me.acc) return no();
+      const co = (await G.companies.get(cid, { type: 'json' })) || { members: [] };
+      const members = async () => {
+        const out = [];
+        for (const u of co.members || []) { const a = await G.accounts.get('u:' + u, { type: 'json' }); if (a) out.push({ uid: a.uid, name: a.name, email: a.email, phone: a.phone, role: a.role, owner: u === co.owner }); }
+        return out;
+      };
+      if (path === 'team' && req.method === 'GET') return json({ ok: true, company: co.name, members: await members() });
+      const b = await body_(1000);
+      if (path === 'team/add' && req.method === 'POST') {
+        const email = String(b.email || '').trim().toLowerCase(), pk = b.phone ? phoneKey(b.phone) : '';
+        if (!email && !pk) return json({ error: 'id' }, 400);
+        if (email && !EMAIL.test(email)) return json({ error: 'email' }, 400);
+        if (pk && pk.length < 7) return json({ error: 'phone' }, 400);
+        if (!pwOK(b.password)) return json({ error: 'password' }, 400);
+        const taken = await freeIds(email, pk); if (taken) return json({ error: taken }, 409);
+        const acc = await makeAccount(cid, 'supervisor', b.name, email, pk, b.password);
+        co.members = (co.members || []).concat([acc.uid]); await G.companies.setJSON(cid, co);
+        return json({ ok: true, members: await members() });
+      }
+      const target = (co.members || []).indexOf(String(b.uid || '')) > -1 ? await G.accounts.get('u:' + b.uid, { type: 'json' }) : null;
+      if (!target || target.uid === co.owner) return json({ error: 'member' }, 400);
+      if (path === 'team/remove' && req.method === 'POST') {
+        await dropAccount(target);
+        co.members = co.members.filter((u) => u !== target.uid); await G.companies.setJSON(cid, co);
+        return json({ ok: true, members: await members() });
+      }
+      if (path === 'team/password' && req.method === 'POST') {
+        if (!pwOK(b.password)) return json({ error: 'password' }, 400);
+        target.salt = randomBytes(16).toString('hex'); target.hash = await scrypt(b.password, target.salt);
+        await endSessions(target); await G.accounts.setJSON('u:' + target.uid, target);
+        return json({ ok: true });
+      }
+      return json({ error: 'unknown' }, 404);
     }
 
     if (path === 'sync' && req.method === 'PUT') {
-      const role = await roleOf();
-      if (!role) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      if (!(await signedIn())) return no();
+      const role = me.role;
       const text = await req.text();
       if (text.length > 3000000) return json({ error: 'toolarge' }, 413);
       const body = JSON.parse(text);
@@ -220,7 +412,16 @@ export default async (req) => {
       const want = {};
       Object.keys(body.schedules || {}).slice(0, 300).forEach((p) => { const k = phoneKey(p); if (k.length >= 7 && !want[k]) want[k] = cleanSchedule(body.schedules[p]); });
       const { blobs } = await sch.list();
-      for (const b of blobs) if (!want[b.key]) { await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); await pins.delete(b.key); await asks.delete(b.key); }
+      for (const b of blobs) if (!want[b.key]) {
+        await sch.delete(b.key); await subs.delete(b.key); await seen.delete(b.key); await pins.delete(b.key); await asks.delete(b.key);
+        const ix = ((await G.phones.get(b.key, { type: 'json' })) || []).filter((x) => x !== cid);
+        if (ix.length) await G.phones.setJSON(b.key, ix); else await G.phones.delete(b.key);
+      }
+      const had = {}; blobs.forEach((b) => { had[b.key] = 1; });
+      for (const k of Object.keys(want)) {
+        const ix = (await G.phones.get(k, { type: 'json' })) || [];
+        if (ix.indexOf(cid) < 0) await G.phones.setJSON(k, ix.concat([cid]));
+      }
       const now = new Date().toISOString();
       const today = DATE.test(body.today) ? body.today : now.slice(0, 10);
       let notified = 0;
@@ -270,33 +471,22 @@ export default async (req) => {
     }
 
     if (path === 'data' && req.method === 'GET') {
-      const role = await roleOf();
-      if (!role) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      if (!(await signedIn())) return no();
+      const role = me.role;
       const cur = await sharedState();
       if (String(cur.rev) === url.searchParams.get('rev')) return json({ ok: true, same: true, rev: cur.rev, role });
-      return json({ ok: true, rev: cur.rev, role, has: cur.has, ...(role === 'supervisor' ? noMoney(cur) : { staff: cur.staff, weeks: cur.weeks, branches: cur.branches, settings: cur.settings }) });
-    }
-
-    if (path === 'supervisor' && req.method === 'POST') {
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
-      const body = JSON.parse((await req.text()).slice(0, 300));
-      if (body.remove) { await cfg.delete('supervisor'); return json({ ok: true, hasSupervisor: false }); }
-      const t = String(body.token || '');
-      if (!/^[a-f0-9]{64}$/.test(t)) return json({ error: 'bad' }, 400);
-      if (t === tokenOf()) return json({ error: 'same' }, 400);
-      const salt = randomBytes(16).toString('hex');
-      await cfg.setJSON('supervisor', { salt, hash: hashOf(t, salt), created: new Date().toISOString() });
-      return json({ ok: true, hasSupervisor: true });
+      const coRec = (await G.companies.get(cid, { type: 'json' })) || {};
+      return json({ ok: true, rev: cur.rev, role, company: coRec.name || '', has: cur.has, ...(role === 'supervisor' ? noMoney(cur) : { staff: cur.staff, weeks: cur.weeks, branches: cur.branches, settings: cur.settings }) });
     }
 
     if (path === 'backup' && req.method === 'GET') {
-      if (!(await isAdmin())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      if (!(await signedIn('admin'))) return no();
       const d = await bak.get('latest', { type: 'json' });
       return d ? json(d) : json({ error: 'notfound' }, 404);
     }
 
     if (path === 'status' && req.method === 'GET') {
-      if (!(await isUser())) { await sleep(1200); return json({ error: 'wrongpassword' }, 401); }
+      if (!(await signedIn())) return no();
       const { blobs } = await sch.list();
       return json({ ok: true, status: await statusOf(blobs.map((b) => b.key)) });
     }
@@ -304,10 +494,9 @@ export default async (req) => {
     if (path === 'push-key' && req.method === 'GET') return json({ key: (await vapid()).publicKey });
 
     if (path === 'subscribe' && req.method === 'POST') {
-      const body = JSON.parse((await req.text()).slice(0, 5000));
-      const k = phoneKey(body.phone), sub = body.sub;
-      if (k.length < 7 || !sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) return json({ error: 'bad' }, 400);
-      if (!(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
+      const body = await body_(5000), sub = body.sub;
+      if (!sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) return json({ error: 'bad' }, 400);
+      const sc = await staffCtx(body.phone, body.c); if (sc.err) return sc.err; const k = sc.k;
       const a = await staffAuth(k); if (a !== 'ok') return denied(a);
       const list = ((await subs.get(k, { type: 'json' })) || []).filter((x) => x.endpoint !== sub.endpoint);
       list.push({ endpoint: sub.endpoint, keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } });
@@ -316,18 +505,16 @@ export default async (req) => {
     }
 
     if (path === 'payslips' && req.method === 'GET') {
-      const k = phoneKey(url.searchParams.get('phone'));
-      if (k.length < 7 || !(await sch.get(k, { type: 'json' }))) return json({ error: 'notfound' }, 404);
+      const sc = await staffCtx(url.searchParams.get('phone'), url.searchParams.get('c')); if (sc.err) return sc.err; const k = sc.k;
       const a = await staffAuth(k); if (a !== 'ok') return denied(a);
-      return json({ ok: true, list: (await getStore({ name: 'payslips', consistency: 'strong' }).get(k, { type: 'json' })) || [] });
+      return json({ ok: true, list: (await slips.get(k, { type: 'json' })) || [] });
     }
 
     if (path === 'ask' && req.method === 'POST') {
       // An employee says their hours are missing: tell the manager's phone(s).
-      const body = JSON.parse((await req.text()).slice(0, 300));
-      const k = phoneKey(body.phone);
-      const d = k.length >= 7 ? await sch.get(k, { type: 'json' }) : null;
-      if (!d) return json({ error: 'notfound' }, 404);
+      const body = await body_(300);
+      const sc = await staffCtx(body.phone, body.c); if (sc.err) return sc.err; const k = sc.k;
+      const d = await sch.get(k, { type: 'json' });
       const a = await staffAuth(k); if (a !== 'ok') return denied(a);
       const prev = await asks.get(k, { type: 'json' });
       if (prev && Date.now() - Date.parse(prev.at) < 3 * 3600000) return json({ ok: true, already: true });
@@ -344,10 +531,9 @@ export default async (req) => {
     }
 
     if (path === 'seen' && req.method === 'POST') {
-      const body = JSON.parse((await req.text()).slice(0, 500));
-      const k = phoneKey(body.phone);
-      const d = k.length >= 7 ? await sch.get(k, { type: 'json' }) : null;
-      if (!d) return json({ error: 'notfound' }, 404);
+      const body = await body_(500);
+      const sc = await staffCtx(body.phone, body.c); if (sc.err) return sc.err; const k = sc.k;
+      const d = await sch.get(k, { type: 'json' });
       const a = await staffAuth(k); if (a !== 'ok') return denied(a);
       if (body.upd && body.upd === d.upd) await seen.setJSON(k, { at: new Date().toISOString(), upd: d.upd });
       return json({ ok: true });
