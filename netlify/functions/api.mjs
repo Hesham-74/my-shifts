@@ -362,6 +362,41 @@ export default async (req) => {
       return json({ ok: true, token: await newSession(acc) });
     }
 
+    if (path === 'auth/delete' && req.method === 'POST') {
+      // Delete my account. An owner's deletion removes the whole business and everything in it.
+      if (!(await signedIn()) || !me.acc) return no();
+      const b = await body_(500), acc = me.acc;
+      if ((await scrypt(b.password || '', acc.salt)) !== acc.hash) { await sleep(800); return json({ error: 'wrong' }, 401); }
+      const co = (await G.companies.get(cid, { type: 'json' })) || { members: [] };
+      if (acc.role !== 'admin' || co.owner !== acc.uid) {
+        await dropAccount(acc);
+        co.members = (co.members || []).filter((u) => u !== acc.uid); await G.companies.setJSON(cid, co);
+        return json({ ok: true, deleted: 'account' });
+      }
+      for (const u of co.members || []) { const a = await G.accounts.get('u:' + u, { type: 'json' }); if (a) await dropAccount(a); }
+      const S = storesFor(cid);
+      for (const name of Object.keys(S)) {
+        const { blobs } = await S[name].list();
+        for (const x of blobs) {
+          if (name === 'schedules') { const ix = ((await G.phones.get(x.key, { type: 'json' })) || []).filter((c) => c !== cid); if (ix.length) await G.phones.setJSON(x.key, ix); else await G.phones.delete(x.key); }
+          if (cid === 'legacy' && name === 'config' && x.key === 'vapid') continue;   // shared notification key, not business data
+          await S[name].delete(x.key);
+        }
+      }
+      if (cid === 'legacy') await storesFor('legacy').config.setJSON('claimed', { at: new Date().toISOString(), deleted: true });
+      await G.companies.delete(cid);
+      return json({ ok: true, deleted: 'business' });
+    }
+
+    if (path === 'forget-me' && req.method === 'POST') {
+      // An employee removes their login, notifications and read receipts. Their hours stay with their employer.
+      const b = await body_(300);
+      const sc = await staffCtx(b.phone, b.c); if (sc.err) return sc.err; const k = sc.k;
+      const a = await staffAuth(k); if (a !== 'ok') return denied(a);
+      await pins.delete(k); await subs.delete(k); await seen.delete(k); await asks.delete(k);
+      return json({ ok: true });
+    }
+
     if (path.indexOf('team') === 0) {
       if (!(await signedIn('admin')) || !me.acc) return no();
       const co = (await G.companies.get(cid, { type: 'json' })) || { members: [] };

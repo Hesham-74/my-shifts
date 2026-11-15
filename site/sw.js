@@ -1,5 +1,5 @@
 /* Offline cache for My Shifts. Bump CACHE when the app files change. */
-const CACHE = 'my-shifts-v9';
+const CACHE = 'my-shifts-v10';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

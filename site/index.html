@@ -110,6 +110,16 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
 .title { font-weight: 800; letter-spacing: .12em; font-size: 11px; }
 .day.today { background: var(--accent-soft); }
 .day.today .d b { color: var(--brass); }
+.welcome { display: grid; gap: 6px; padding: 24px 2px 4px; }
+.welcome .mark { width: 56px; height: 56px; border-radius: 16px; margin-bottom: 10px; background: var(--brass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230E1A2E' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3Cpath d='M12 7.5V12l3 2'/%3E%3C/svg%3E") center / 32px no-repeat; box-shadow: 0 12px 30px -12px rgba(185, 138, 51, .7); }
+.welcome h2 { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
+.welcome p { color: var(--ink-2); }
+.choose { display: grid; gap: 12px; }
+.btn.big { display: grid; gap: 2px; justify-items: start; text-align: left; padding: 16px 18px; min-height: 72px; }
+.btn.big strong { font-size: 17px; }
+.btn.big span { font-weight: 500; font-size: 13.5px; opacity: .78; }
+.legal { text-align: center; font-size: 12px; color: var(--ink-2); }
+.legal a { color: inherit; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -287,6 +297,9 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
   }
   var times = function (x) { return x.i + ' – ' + (x.o || '…'); };
 
+  function role() { try { return localStorage.getItem('myshifts-role') || ''; } catch (e) { return 'staff'; } }
+  function setRole(r) { try { if (r) localStorage.setItem('myshifts-role', r); else localStorage.removeItem('myshifts-role'); } catch (e) {} }
+  function legal() { return '<p class="legal"><a href="/privacy/">Privacy</a> · <a href="/terms/">Terms</a> · <a href="/support/">Help</a></p>'; }
   function enterHTML() {
     var msg = '<p class="msg' + (ui.err ? ' err' : '') + '" role="status">' + esc(ui.busy ? 'One moment…' : ui.msg) + '</p>';
     if (ui.step === 'choose') {
@@ -309,10 +322,16 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
         '<p class="hint">Forgot it? Ask your manager to reset your code, then make a new one here.</p>' +
         '<button class="btn" type="button" data-act="back">Use a different number</button></form>';
     }
+    if (ui.step === 'phone' && !role()) {
+      return '<section class="welcome"><div class="mark" aria-hidden="true"></div><h2>Welcome to My Shifts</h2><p>Shifts, hours and payslips for restaurant teams.</p></section>' +
+        '<section class="card choose"><button class="btn primary big" data-act="role-staff"><strong>I work here</strong><span>See my shifts and payslips</span></button>' +
+        '<button class="btn big" data-act="role-manager"><strong>I run a business</strong><span>Owners, managers and supervisors</span></button></section>' + legal();
+    }
     return '<form class="card" id="f" autocomplete="off"><h2 class="title">Your work times</h2>' +
       '<label>Your phone number<input id="code" type="tel" inputmode="tel" autocomplete="tel" placeholder="085 123 4567" value="' + esc(ui.draft) + '"></label>' +
       '<button class="btn primary" type="submit">Next</button>' + msg +
-      '<p class="hint">Enter the phone number your manager has for you.</p></form>';
+      '<p class="hint">Enter the phone number your manager has for you.</p></form>' +
+      '<a class="btn" style="text-align:center;text-decoration:none" href="/manager/" data-act="role-manager">I run a business: manager sign in</a>' + legal();
   }
   function showHTML() {
     if (ui.slipOpen !== undefined && ui.slipOpen !== null && (saved.slips || [])[ui.slipOpen]) {
@@ -338,7 +357,8 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
     h += '<p class="hint">' + (ui.online ? '' : 'You are offline. Showing the last times saved on this phone. ') +
       (upd && !isNaN(upd.getTime()) ? 'Updated by your manager ' + esc(fWhen.format(upd)) + '. ' : '') +
       'Ask your manager if something looks wrong.</p>' +
-      '<button class="btn" data-act="switch" style="justify-self:start">Log out</button>';
+      '<div class="row"><button class="btn" data-act="switch">Log out</button><button class="btn" data-act="forget">' + (ui.forgetAsk ? 'Tap again to remove' : 'Remove my login') + '</button></div>' +
+      '<p class="hint">Remove my login deletes your code and notifications from My Shifts. Your hours and payslips stay with your employer.</p>' + legal();
     return h;
   }
   function render() {
@@ -407,6 +427,13 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
         ui.busy = false; ui.company = j.company || ch.name; ui.step = j.hasPin ? 'pin' : 'new'; render();
       }, function () { ui.busy = false; ui.err = true; ui.msg = 'No internet connection. Connect and try again.'; render(); });
     }
+    else if (a === 'role-staff') { setRole('staff'); render(); var pf = document.getElementById('code'); if (pf) pf.focus(); }
+    else if (a === 'role-manager') { setRole('manager'); location.href = '/manager/'; }
+    else if (a === 'forget') {
+      if (!ui.forgetAsk) { ui.forgetAsk = true; render(); return; }
+      ui.forgetAsk = false;
+      post('forget-me', { phone: saved.phone }, auth()).then(function () {}, function () {}).then(function () { forget(); ui.phase = 'enter'; ui.step = 'phone'; ui.draft = ''; ui.msg = 'Your login was removed from this phone and from My Shifts.'; ui.err = false; render(); });
+    }
     else if (a === 'switch' || a === 'back') { ui.c = ''; ui.choices = null; forget(); ui.phase = 'enter'; ui.step = 'phone'; ui.draft = ''; ui.err = false; ui.msg = ''; render(); }
   });
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && saved) { markSeen(); refresh(false); } });
@@ -415,6 +442,8 @@ input:focus { outline: none; background: var(--surface); border-color: var(--acc
 
   /* start */
   load();
+  if (!saved && role() === 'manager') { location.replace('/manager/'); return; }
+  if (saved) setRole('staff');
   if (saved) { ui.phase = saved.data ? 'show' : 'enter'; render(); ui.busy = false; refresh(false); }
   else render();
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) { navigator.serviceWorker.register('sw.js').catch(function () {}); }

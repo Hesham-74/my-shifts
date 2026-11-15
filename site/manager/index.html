@@ -401,6 +401,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
 .authpoints li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; font-size: 14px; color: var(--ink-2); }
 .authpoints li::before { content: ""; width: 22px; height: 22px; border-radius: 50%; background: var(--brass-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23B98A33' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center / 13px no-repeat; }
 .authfoot { text-align: center; font-size: 12px; color: var(--ink-2); padding: 6px 0 0; }
+.authfoot a { color: inherit; font-weight: 600; }
+details > summary.btn.danger { color: var(--bad); }
 @media (prefers-reduced-motion: no-preference) { main > * { animation: rise .22s ease-out both; } @keyframes rise { from { opacity: 0; transform: translateY(6px); } } }
 </style>
 </head>
@@ -925,7 +927,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
         '<div class="authlinks">' + link('forgot', 'Forgot password') + link('signup', 'Create a business account') + '</div>' +
         '<p class="hint">Supervisors sign in with the email or phone number and password their manager gave them.</p>';
     }
-    return h + '</section><p class="authfoot">My Shifts · Your records are private to your business.</p>';
+    return h + '</section><a class="btn" style="text-align:center;text-decoration:none" href="/" data-role="staff">I work here: see my shifts</a>' +
+      '<p class="authfoot">My Shifts · <a href="/privacy/">Privacy</a> · <a href="/terms/">Terms</a> · <a href="/support/">Help</a></p>';
   }
   /* Typed values live in memory only (never saved), so a refresh of the screen does not empty the form. */
   function keepDraft() { ui.authDraft = ui.authDraft || {}; Array.prototype.forEach.call(app.querySelectorAll('#auth-f input'), function (el) { ui.authDraft[el.id] = el.value; }); }
@@ -935,6 +938,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
     if (kind !== 'signup' && prev !== res.cid) wipeLocal();
     netSet({ token: res.token, acct: true, role: res.role, cid: res.cid, company: res.company, name: res.name, email: res.email || '', err: '', rev: 0, dirty: {}, last: 0 });
     ui.forceAuth = false; ui.auth = 'login'; ui.authBusy = false; ui.authMsg = ''; ui.authDraft = {};
+    try { localStorage.setItem('myshifts-role', 'manager'); } catch (e) {}
     if (res.company && !mainSet().company && res.role === 'admin') mainSet().company = res.company;
     return netApi('GET', 'data').then(function (d) {
       if (d.has) { adopt(d); render(); toast(res.moved ? 'Your records moved to your new account.' : 'Signed in.'); return; }
@@ -943,6 +947,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
       toast(res.role === 'admin' ? 'Account ready. Add your staff in the Staff tab.' : 'Signed in. Your manager has not saved any records yet.');
     });
   }
+  document.addEventListener('click', function (e) { var a = e.target.closest && e.target.closest('[data-role="staff"]'); if (a) { try { localStorage.setItem('myshifts-role', 'staff'); } catch (x) {} } });
   document.addEventListener('submit', function (e) {
     if (!e.target || e.target.id !== 'auth-f') return;
     e.preventDefault(); if (ui.authBusy) return;
@@ -965,6 +970,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
     var t = netCfg().token;
     if (t && isAcct()) netApi('POST', 'auth/logout', {}, t).catch(function () {});
     wipeLocal(); setSetting('net', {}); ui.team = null; ui.auth = 'login'; ui.forceAuth = false; render(); window.scrollTo(0, 0);
+    try { localStorage.removeItem('myshifts-role'); } catch (e) {}
   }
   /* Owner: who else can sign in to this business. */
   function loadTeam() { if (!isAcct() || isSup() || ui.teamBusy) return; ui.teamBusy = true; netApi('GET', 'team').then(function (r) { ui.teamBusy = false; ui.team = r.members || []; if (ui.tab === 'staff') safeRender(); }, function () { ui.teamBusy = false; }); }
@@ -996,7 +1002,12 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
       '<label class="field"><span>Current password</span><input type="password" id="p-old" data-f="t-in" autocomplete="current-password"></label>' +
       '<label class="field"><span>New password (8 characters or more)</span><input type="password" id="p-new" data-f="t-in" autocomplete="new-password"></label>' +
       '<button class="btn primary" data-act="acct-pw">Save new password</button></div></details>' +
-      '<button class="btn" data-act="fb-off">Sign out of this phone</button></div></section>';
+      '<button class="btn" data-act="fb-off">Sign out of this phone</button>' +
+      '<details' + (ui.delOpen ? ' open' : '') + '><summary class="btn danger">Delete my account</summary><div class="addform" style="margin-top:10px">' +
+      '<p class="hint">' + (isSup() ? 'Removes your supervisor login. The business and its records stay.' : 'Deletes your business for good: all staff, hours, pay, payslips, branches and supervisor logins. Your staff can no longer see their shifts. This cannot be undone. Save a backup first if you may need the records.') + '</p>' +
+      '<label class="field"><span>Your password, to confirm</span><input type="password" id="del-pw" data-f="t-in" autocomplete="current-password"></label>' +
+      '<button class="btn danger" data-act="acct-del">' + (ui.delAsk ? 'Tap again: delete for good' : (isSup() ? 'Delete my login' : 'Delete my business and all its records')) + '</button></div></details>' +
+      '<p class="authfoot"><a href="/privacy/">Privacy</a> · <a href="/terms/">Terms</a> · <a href="/support/">Help</a></p></div></section>';
   }
   function teamAct(act, b) {
     var val = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
@@ -1017,6 +1028,17 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
       if (ui.teamAsk !== uidR) { ui.teamAsk = uidR; render(); return; }
       ui.teamAsk = null;
       netApi('POST', 'team/remove', { uid: uidR }).then(function (r) { ui.team = r.members; ui.supMsg = 'Removed. They are signed out.'; ui.supErr = false; render(); }, function (e) { ui.supErr = true; ui.supMsg = authErr(e); render(); });
+      return;
+    }
+    if (act === 'acct-del') {
+      ui.delOpen = true;
+      var pwD = val('del-pw'); if (!pwD) { toast('Enter your password to confirm.'); return; }
+      if (!ui.delAsk) { ui.delAsk = true; render(); var d0 = document.getElementById('del-pw'); if (d0) d0.value = pwD; return; }
+      ui.delAsk = false;
+      netApi('POST', 'auth/delete', { password: pwD }).then(function (r) {
+        ui.delOpen = false; wipeLocal(); setSetting('net', {}); ui.team = null; ui.auth = 'login'; render(); window.scrollTo(0, 0);
+        toast(r.deleted === 'business' ? 'Your business and all its records were deleted.' : 'Your login was deleted.');
+      }, function (e) { render(); toast(e.status === 401 ? 'The password is wrong. Nothing was deleted.' : authErr(e)); });
       return;
     }
     if (act === 'acct-pw') {
