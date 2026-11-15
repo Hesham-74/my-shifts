@@ -404,6 +404,18 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brass); o
 .authfoot a { color: inherit; font-weight: 600; }
 details > summary.btn.danger { color: var(--bad); }
 @media (prefers-reduced-motion: no-preference) { main > * { animation: rise .22s ease-out both; } @keyframes rise { from { opacity: 0; transform: translateY(6px); } } }
+
+.members { display: grid; gap: 10px; }
+.member { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+.mtop { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.mtop strong { display: block; font-weight: 800; }
+.mtop .hint { display: block; overflow-wrap: anywhere; }
+.mtop select { min-height: 40px; width: auto; font-weight: 700; padding-right: 30px; }
+.rolechip { font-size: 12px; font-weight: 800; padding: 6px 10px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.rolechip.r-owner { background: var(--brass-soft); color: var(--brass); }
+.rolechip.r-manager { background: var(--accent-soft); color: var(--accent); }
+details.roles summary { cursor: pointer; font-weight: 700; }
+details.roles ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-2); display: grid; gap: 4px; }
 </style>
 </head>
 <body>
@@ -610,7 +622,13 @@ details > summary.btn.danger { color: var(--bad); }
     /* A supervisor's phone must not keep pay rates it was given before this rule existed: fetch a clean copy. */
     var stale = isSup() && Object.keys(state.staff).some(function (k) { return state.staff[k].rate !== undefined || state.staff[k].bank !== undefined; });
     return netApi('GET', 'data?rev=' + (stale ? -1 : (netCfg().rev || 0))).then(function (res) {
-      if (res.role && res.role !== netCfg().role) { netSet({ role: res.role }); safeRender(); }
+      if (res.role && res.role !== netCfg().role) {
+        /* Promoted or demoted: fetch the records again, with or without pay, to match the new role. */
+        var wasSup = netCfg().role === 'supervisor';
+        netSet({ role: res.role, rev: -1 }); ui.team = null;
+        if (wasSup || res.role === 'supervisor') { netRun.running = false; return netPoll().then(function () { safeRender(); toast('Your role is now ' + ROLE_LABEL[res.role] + '.'); }); }
+        safeRender(); toast('Your role is now ' + ROLE_LABEL[res.role] + '.');
+      }
       if (!res.same && res.has) { adopt(res); if (Object.keys(netCfg().dirty || {}).length) scheduleSync(); }
     }, function (e) { if (e.status === 401) { wipeLocal(); setSetting('net', {}); ui.authMsg = 'You were signed out. Sign in again.'; ui.authErr = true; safeRender(); } });
   }
@@ -895,7 +913,7 @@ details > summary.btn.danger { color: var(--bad); }
     state.staff = {}; state.weeks = {}; state.branches = {}; state.settings = {}; localSave();
     setSetting('branch', ''); netRun.lastSig = ''; netRun.status = null;
   }
-  var AUTH_ERR = { wrong: 'That email or phone number and password do not match.', locked: 'Too many wrong tries. Wait 15 minutes and try again.', emailtaken: 'An account with this email already exists. Sign in instead.', phonetaken: 'This phone number is already used by another account.', email: 'Enter a valid email address.', phone: 'Enter the full phone number.', password: 'Use a password of 8 characters or more.', company: 'Enter the name of your business.', code: 'That code is wrong or too old. Ask for a new one.', id: 'Enter an email or a phone number.' };
+  var AUTH_ERR = { notallowed: 'Only an owner can do that.', member: 'That person cannot be changed.', wrong: 'That email or phone number and password do not match.', locked: 'Too many wrong tries. Wait 15 minutes and try again.', emailtaken: 'An account with this email already exists. Sign in instead.', phonetaken: 'This phone number is already used by another account.', email: 'Enter a valid email address.', phone: 'Enter the full phone number.', password: 'Use a password of 8 characters or more.', company: 'Enter the name of your business.', code: 'That code is wrong or too old. Ask for a new one.', id: 'Enter an email or a phone number.' };
   function authErr(e) { return e.status === 0 ? 'No internet connection.' : AUTH_ERR[e.message] || 'Something went wrong. Try again in a moment.'; }
   function aIn(id, label, type, extra) {
     return '<label class="field"><span>' + esc(label) + '</span><input id="' + id + '" type="' + type + '" ' + (extra || '') + ' value="' + esc((ui.authDraft || {})[id] || '') + '"></label>';
@@ -939,12 +957,12 @@ details > summary.btn.danger { color: var(--bad); }
     netSet({ token: res.token, acct: true, role: res.role, cid: res.cid, company: res.company, name: res.name, email: res.email || '', err: '', rev: 0, dirty: {}, last: 0 });
     ui.forceAuth = false; ui.auth = 'login'; ui.authBusy = false; ui.authMsg = ''; ui.authDraft = {};
     try { localStorage.setItem('myshifts-role', 'manager'); } catch (e) {}
-    if (res.company && !mainSet().company && res.role === 'admin') mainSet().company = res.company;
+    if (res.company && !mainSet().company && res.role !== 'supervisor') mainSet().company = res.company;
     return netApi('GET', 'data').then(function (d) {
       if (d.has) { adopt(d); render(); toast(res.moved ? 'Your records moved to your new account.' : 'Signed in.'); return; }
       render();
-      if (res.role === 'admin' && hasData()) return runSync(true).then(function () { toast(legacyBefore ? 'Your records moved to your new account.' : 'Account ready. Your records are saved online.'); });
-      toast(res.role === 'admin' ? 'Account ready. Add your staff in the Staff tab.' : 'Signed in. Your manager has not saved any records yet.');
+      if (res.role !== 'supervisor' && hasData()) return runSync(true).then(function () { toast(legacyBefore ? 'Your records moved to your new account.' : 'Account ready. Your records are saved online.'); });
+      toast(res.role !== 'supervisor' ? 'Account ready. Add your staff in the Staff tab.' : 'Signed in. Your manager has not saved any records yet.');
     });
   }
   document.addEventListener('click', function (e) { var a = e.target.closest && e.target.closest('[data-role="staff"]'); if (a) { try { localStorage.setItem('myshifts-role', 'staff'); } catch (x) {} } });
@@ -974,30 +992,41 @@ details > summary.btn.danger { color: var(--bad); }
   }
   /* Owner: who else can sign in to this business. */
   function loadTeam() { if (!isAcct() || isSup() || ui.teamBusy) return; ui.teamBusy = true; netApi('GET', 'team').then(function (r) { ui.teamBusy = false; ui.team = r.members || []; if (ui.tab === 'staff') safeRender(); }, function () { ui.teamBusy = false; }); }
+  var ROLE_LABEL = { owner: 'Owner', manager: 'Manager', supervisor: 'Supervisor', admin: 'Owner' };
+  var ROLE_WHAT = { owner: 'Everything, including people, payslips and deleting the business.', manager: 'Everything except changing owners and managers or deleting the business.', supervisor: 'Records hours and days off. Never sees pay, rates, bank or payslips.' };
+  function myRank() { return { owner: 3, admin: 3, manager: 2, supervisor: 1 }[netCfg().role] || 0; }
   function supHTML() {
     if (isSup()) return '';
     if (!isAcct()) return '<div class="card nudge"><div><strong>Move to an email account</strong><p class="hint">Sign in with your email from any phone, add supervisors and get your password back if you forget it.</p></div><button class="btn primary" data-act="auth-mode" data-m="signup">Set up</button></div>';
     if (!ui.team) loadTeam();
+    var owner = myRank() >= 3;
     var list = (ui.team || []).map(function (m) {
       var who = [m.email, m.phone].filter(Boolean).join(' · ');
-      return '<div class="slitem" data-uid="' + esc(m.uid) + '"><div><strong>' + esc(m.name || who) + '</strong><span class="hint">' + (m.owner ? 'Owner · ' : m.role === 'supervisor' ? 'Supervisor · ' : '') + esc(who) + '</span></div>' +
-        (m.owner ? '' : '<button class="btn danger" data-act="team-rm">' + (ui.teamAsk === m.uid ? 'Tap again' : 'Remove') + '</button>') + '</div>';
+      var canEdit = !m.me && !m.founder && (owner || m.role === 'supervisor');
+      var roleCtl = owner && canEdit ? '<select data-f="team-role" aria-label="Role for ' + esc(m.name || who) + '">' + ['owner', 'manager', 'supervisor'].map(function (r) { return '<option value="' + r + '"' + (m.role === r ? ' selected' : '') + '>' + ROLE_LABEL[r] + '</option>'; }).join('') + '</select>'
+        : '<span class="rolechip r-' + esc(m.role) + '">' + esc(ROLE_LABEL[m.role] || m.role) + (m.founder ? ' · founder' : '') + (m.me ? ' · you' : '') + '</span>';
+      return '<div class="member" data-uid="' + esc(m.uid) + '"><div class="mtop"><div><strong>' + esc(m.name || who) + '</strong><span class="hint">' + esc(who) + '</span></div>' + roleCtl + '</div>' +
+        (canEdit ? '<button class="btn danger" data-act="team-rm">' + (ui.teamAsk === m.uid ? 'Tap again to remove ' + esc(m.name || 'them') : 'Remove') + '</button>' : '') + '</div>';
     }).join('');
+    var addRoles = owner ? ['supervisor', 'manager', 'owner'] : ['supervisor'];
     return '<div class="card" style="background:var(--surface-2);display:grid;gap:10px"><strong>People who can sign in</strong>' +
-      '<div class="sllist">' + (list || '<p class="hint">Loading…</p>') + '</div>' +
-      '<p class="hint">Add a supervisor. They sign in with the email or phone number and the password you set here. They record hours and days off and never see pay, rates, bank or payslips.</p>' +
+      '<div class="members">' + (list || '<p class="hint">Loading…</p>') + '</div>' +
+      (owner ? '<p class="hint">Change someone’s role with the box next to their name. It applies the next time their app checks in, within a minute.</p>' : '') +
+      '<details class="roles"><summary class="hint">What each role can do</summary><ul>' + ['owner', 'manager', 'supervisor'].map(function (r) { return '<li><strong>' + ROLE_LABEL[r] + ':</strong> ' + esc(ROLE_WHAT[r]) + '</li>'; }).join('') + '</ul></details>' +
+      '<strong style="margin-top:6px">Add someone</strong>' +
       '<label class="field"><span>Name</span><input type="text" id="t-name" data-f="t-in" autocomplete="off"></label>' +
+      (addRoles.length > 1 ? '<label class="field"><span>Role</span><select id="t-role" data-f="t-in">' + addRoles.map(function (r) { return '<option value="' + r + '">' + ROLE_LABEL[r] + '</option>'; }).join('') + '</select></label>' : '') +
       '<label class="field"><span>Email (or leave empty and use a phone number)</span><input type="email" id="t-email" data-f="t-in" inputmode="email" autocapitalize="off" autocomplete="off"></label>' +
       '<label class="field"><span>Phone number</span><input type="tel" id="t-phone" data-f="t-in" inputmode="tel" autocomplete="off"></label>' +
       '<label class="field"><span>Their password (8 characters or more)</span><input type="text" id="t-pw" data-f="t-in" autocomplete="off" autocapitalize="off"></label>' +
-      '<button class="btn primary" data-act="team-add">Add supervisor</button>' +
+      '<button class="btn primary" data-act="team-add">Add</button>' +
       '<p class="msg' + (ui.supErr ? ' err' : '') + '" role="status">' + esc(ui.supMsg || '') + '</p></div>';
   }
   function accountHTML() {
     if (!isAcct()) return '';
     var f = netCfg();
     return '<section class="card"><h2 class="sec-title">Your account</h2><div class="addform">' +
-      '<p><strong>' + esc(f.company || '') + '</strong><br><span class="hint">' + esc(f.name || '') + (f.email ? ' · ' + esc(f.email) : '') + ' · ' + (isSup() ? 'Supervisor' : 'Owner') + '</span></p>' +
+      '<p><strong>' + esc(f.company || '') + '</strong><br><span class="hint">' + esc(f.name || '') + (f.email ? ' · ' + esc(f.email) : '') + ' · ' + (ROLE_LABEL[netCfg().role] || 'Owner') + '</span></p>' +
       '<details><summary class="btn">Change my password</summary><div class="addform" style="margin-top:10px">' +
       '<label class="field"><span>Current password</span><input type="password" id="p-old" data-f="t-in" autocomplete="current-password"></label>' +
       '<label class="field"><span>New password (8 characters or more)</span><input type="password" id="p-new" data-f="t-in" autocomplete="new-password"></label>' +
@@ -1018,7 +1047,7 @@ details > summary.btn.danger { color: var(--bad); }
     }
     if (act === 'team-add') {
       ui.supMsg = 'Adding…'; ui.supErr = false;
-      netApi('POST', 'team/add', { name: val('t-name'), email: val('t-email'), phone: val('t-phone'), password: val('t-pw') }).then(function (r) {
+      netApi('POST', 'team/add', { name: val('t-name'), role: val('t-role') || 'supervisor', email: val('t-email'), phone: val('t-phone'), password: val('t-pw') }).then(function (r) {
         ui.team = r.members; ui.supErr = false; ui.supMsg = 'Added. Give them the app link and their password.'; render();
       }, function (e) { ui.supErr = true; ui.supMsg = authErr(e); render(); });
       return;
@@ -1061,7 +1090,7 @@ details > summary.btn.danger { color: var(--bad); }
     var f = netCfg(), on = fbOn();
     var h = '<section class="card"><h2 class="sec-title">Staff app and online backup</h2><div class="addform">';
     if (on) {
-      h += '<p><strong>Signed in as ' + (isSup() ? 'Supervisor' : 'Manager') + '.</strong> <span class="hint">Staff app: ' + esc(location.origin) + '/</span></p>' +
+      h += '<p><strong>Signed in as ' + (ROLE_LABEL[netCfg().role] || 'Owner') + '.</strong> <span class="hint">Staff app: ' + esc(location.origin) + '/</span></p>' +
         '<p id="fb-status" class="msg' + (f.err ? ' err' : '') + '" role="status">' + esc(netStatusLine()) + '</p>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" style="flex:1 1 140px" data-act="fb-publish">Send now</button>' +
         '<button class="btn' + (ui.netRestoreAsk ? ' danger' : '') + '" style="flex:1 1 140px" data-act="fb-restore">' + (ui.netRestoreAsk ? 'Tap again: replaces this phone’s data' : 'Restore online backup') + '</button></div>' +
@@ -1214,6 +1243,11 @@ details > summary.btn.danger { color: var(--bad); }
     if (slipInput(f, t)) return true;
     if (f === 'fb-pw') { ui.netPw = t.value; return true; }
     if (f === 'fb-hour' || f === 'sup-pw' || f === 'br-new' || f === 't-in') return true;
+    if (f === 'team-role') {
+      var uidT = t.closest('[data-uid]').getAttribute('data-uid'), roleT = t.value;
+      netApi('POST', 'team/role', { uid: uidT, role: roleT }).then(function (r) { ui.team = r.members; ui.supErr = false; ui.supMsg = 'Role changed to ' + ROLE_LABEL[roleT] + '.'; render(); }, function (e) { ui.supErr = true; ui.supMsg = e.message === 'notallowed' ? 'Only an owner can change roles.' : authErr(e); render(); });
+      return true;
+    }
     if (f === 'br-sel') { setSetting('branch', t.value); ui.confirmRm = null; render(); return true; }
     if (f === 'st-branch') { var sb = cardSid(t); if (state.staff[sb] && state.branches[t.value]) { state.staff[sb].branch = t.value; queueSave('staff', sb, 0); render(); } return true; }
     if (f === 'br-name') { var row = t.closest('[data-bid]'), id2 = row && row.getAttribute('data-bid'), v2 = t.value.trim(); if (id2 && state.branches[id2] && v2) { state.branches[id2].name = v2; queueSave('branches', id2, 300); branchBar(); } return true; }

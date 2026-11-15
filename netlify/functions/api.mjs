@@ -16,6 +16,10 @@ const scrypt = (pw, salt) => new Promise((res, rej) => scryptCb(String(pw), salt
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CID = /^(legacy|c[a-f0-9]{12})$/;
 const DAY = 86400000;
+// Roles, highest first. "admin" is the name accounts had before managers existed: it means owner.
+const ROLES = ['owner', 'manager', 'supervisor'];
+const roleName = (r) => (r === 'admin' ? 'owner' : ROLES.indexOf(r) > -1 ? r : 'supervisor');
+const rank = (r) => ({ owner: 3, manager: 2, supervisor: 1 })[roleName(r)] || 0;
 const FROM_DOMAIN = process.env.MAIL_FROM_DOMAIN || 'mail.myshifts.info';
 async function sendMail(to, subject, html) {
   const key = process.env.RESEND_API_KEY;
@@ -118,12 +122,12 @@ export default async (req) => {
     const ss = await G.sessions.get(sha(t), { type: 'json' });
     if (ss && ss.exp > Date.now()) {
       const acc = await G.accounts.get('u:' + ss.uid, { type: 'json' });
-      if (acc) return { cid: acc.cid, role: acc.role, uid: ss.uid, acc };
+      if (acc) return { cid: acc.cid, role: roleName(acc.role), uid: ss.uid, acc };
     }
     // The single business password used before accounts existed, until the owner moves it to an account.
     const L = storesFor('legacy').config;
     if (!(await L.get('claimed', { type: 'json' }))) {
-      if (matches(t, await L.get('admin', { type: 'json' }))) return { cid: 'legacy', role: 'admin', uid: null, legacy: true };
+      if (matches(t, await L.get('admin', { type: 'json' }))) return { cid: 'legacy', role: 'owner', uid: null, legacy: true };
       if (matches(t, await L.get('supervisor', { type: 'json' }))) return { cid: 'legacy', role: 'supervisor', uid: null, legacy: true };
     }
     return null;
@@ -131,11 +135,11 @@ export default async (req) => {
   let me = null;
   const signedIn = async (need) => {
     me = await sessionOf();
-    if (!me || (need === 'admin' && me.role !== 'admin')) { await sleep(800); return false; }
+    if (!me || (need === 'admin' && rank(me.role) < 2)) { await sleep(800); return false; }
     use(me.cid); return true;
   };
   const roleOf = async () => (me ? me.role : null);
-  const isAdmin = async () => !!me && me.role === 'admin';
+  const isAdmin = async () => !!me && rank(me.role) >= 2;
   const isUser = async () => !!me;
   const no = () => json({ error: 'wrongpassword' }, 401);
 
@@ -195,7 +199,7 @@ export default async (req) => {
     const co = (await G.companies.get(acc.cid, { type: 'json' })) || {};
     use(acc.cid);
     const meta = await bak.get('meta', { type: 'json' });
-    return json({ ok: true, token, role: acc.role, cid: acc.cid, company: co.name || '', name: acc.name, email: acc.email, hasBackup: !!meta });
+    return json({ ok: true, token, role: roleName(acc.role), cid: acc.cid, company: co.name || '', name: acc.name, email: acc.email, hasBackup: !!meta });
   };
   const pwOK = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 200;
 
@@ -303,7 +307,7 @@ export default async (req) => {
           await L.delete('supervisor');
         }
       }
-      const acc = await makeAccount(c, 'admin', name, email, pk, b.password);
+      const acc = await makeAccount(c, 'owner', name, email, pk, b.password);
       await G.companies.setJSON(c, { name: company, owner: acc.uid, members: [acc.uid], created: new Date().toISOString(), plan: 'trial' });
       const token = await newSession(acc);
       const res = await welcome(acc, token); const out = await res.json(); out.moved = moved;
@@ -368,7 +372,7 @@ export default async (req) => {
       const b = await body_(500), acc = me.acc;
       if ((await scrypt(b.password || '', acc.salt)) !== acc.hash) { await sleep(800); return json({ error: 'wrong' }, 401); }
       const co = (await G.companies.get(cid, { type: 'json' })) || { members: [] };
-      if (acc.role !== 'admin' || co.owner !== acc.uid) {
+      if (roleName(acc.role) !== 'owner' || co.owner !== acc.uid) {
         await dropAccount(acc);
         co.members = (co.members || []).filter((u) => u !== acc.uid); await G.companies.setJSON(cid, co);
         return json({ ok: true, deleted: 'account' });
@@ -398,28 +402,42 @@ export default async (req) => {
     }
 
     if (path.indexOf('team') === 0) {
+      // Owners manage everyone. Managers add and remove supervisors. The person who created the business cannot be removed or demoted.
       if (!(await signedIn('admin')) || !me.acc) return no();
       const co = (await G.companies.get(cid, { type: 'json' })) || { members: [] };
+      const myRank = rank(me.role);
       const members = async () => {
         const out = [];
-        for (const u of co.members || []) { const a = await G.accounts.get('u:' + u, { type: 'json' }); if (a) out.push({ uid: a.uid, name: a.name, email: a.email, phone: a.phone, role: a.role, owner: u === co.owner }); }
+        for (const u of co.members || []) { const a = await G.accounts.get('u:' + u, { type: 'json' }); if (a) out.push({ uid: a.uid, name: a.name, email: a.email, phone: a.phone, role: roleName(a.role), founder: u === co.owner, owner: u === co.owner, me: u === me.uid }); }
+        out.sort((x, y) => rank(y.role) - rank(x.role) || String(x.name).localeCompare(String(y.name)));
         return out;
       };
-      if (path === 'team' && req.method === 'GET') return json({ ok: true, company: co.name, members: await members() });
+      if (path === 'team' && req.method === 'GET') return json({ ok: true, company: co.name, myRole: me.role, members: await members() });
       const b = await body_(1000);
+      const wantRole = ROLES.indexOf(b.role) > -1 ? b.role : 'supervisor';
       if (path === 'team/add' && req.method === 'POST') {
+        if (rank(wantRole) >= 2 && myRank < 3) return json({ error: 'notallowed' }, 403);
         const email = String(b.email || '').trim().toLowerCase(), pk = b.phone ? phoneKey(b.phone) : '';
         if (!email && !pk) return json({ error: 'id' }, 400);
         if (email && !EMAIL.test(email)) return json({ error: 'email' }, 400);
         if (pk && pk.length < 7) return json({ error: 'phone' }, 400);
         if (!pwOK(b.password)) return json({ error: 'password' }, 400);
         const taken = await freeIds(email, pk); if (taken) return json({ error: taken }, 409);
-        const acc = await makeAccount(cid, 'supervisor', b.name, email, pk, b.password);
+        const acc = await makeAccount(cid, wantRole, b.name, email, pk, b.password);
         co.members = (co.members || []).concat([acc.uid]); await G.companies.setJSON(cid, co);
         return json({ ok: true, members: await members() });
       }
       const target = (co.members || []).indexOf(String(b.uid || '')) > -1 ? await G.accounts.get('u:' + b.uid, { type: 'json' }) : null;
-      if (!target || target.uid === co.owner) return json({ error: 'member' }, 400);
+      if (!target || target.uid === co.owner || target.uid === me.uid) return json({ error: 'member' }, 400);
+      // A manager can only act on supervisors; an owner on anyone else.
+      if (myRank < 3 && rank(target.role) >= 2) return json({ error: 'notallowed' }, 403);
+      if (path === 'team/role' && req.method === 'POST') {
+        if (myRank < 3) return json({ error: 'notallowed' }, 403);
+        if (roleName(target.role) !== wantRole) {
+          target.role = wantRole; await G.accounts.setJSON('u:' + target.uid, target);
+        }
+        return json({ ok: true, members: await members() });
+      }
       if (path === 'team/remove' && req.method === 'POST') {
         await dropAccount(target);
         co.members = co.members.filter((u) => u !== target.uid); await G.companies.setJSON(cid, co);
